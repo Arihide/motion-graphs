@@ -3,6 +3,8 @@ import { GPUComputationRenderer } from './GPUComputationRenderer'
 
 import calc_pose_error from './calc_pose_error.glsl'
 
+import MotionRenderer from './MotionRenderer'
+
 export default class MotionGraph {
 
     constructor(character) {
@@ -18,7 +20,6 @@ export default class MotionGraph {
     constructMotionGraph(animation) {
 
         let bufferGeometry = new BufferGeometry().fromGeometry(this.character.geometry)
-        console.log(bufferGeometry)
 
         let vertexTexture = new DataTexture(
             bufferGeometry.attributes.position
@@ -156,27 +157,40 @@ export default class MotionGraph {
 
 
         let gpuComputeSize = hierarchyTracks[0].keys.length
-        this.gpuComputeSize = _Math.ceilPowerOfTwo(gpuComputeSize)
+        gpuComputeSize = _Math.ceilPowerOfTwo(gpuComputeSize)
 
-        this.gpuCompute = new GPUComputationRenderer(gpuComputeSize, gpuComputeSize, new WebGLRenderer())
-        let errorTexture = this.gpuCompute.createTexture()
-        let errorVariable = this.gpuCompute.addVariable("textureMotion1", calc_pose_error, errorTexture)
+        let renderer = MotionRenderer
 
-        errorVariable.material.uniforms.vertexTexture = vertexTexture
-        errorVariable.material.uniforms.skinIndicesTexture = skinIndicesTexture
-        errorVariable.material.uniforms.skinWeightsTexture = skinWeightsTexture
-        errorVariable.material.uniforms.skinIndicesTextureSize = skinIndicesTextureSize
+        this.gpuCompute = new GPUComputationRenderer(1024, 1024, renderer)
+        const errorTexture = this.gpuCompute.createTexture()
+        errorTexture.image.data.fill(1)
+        this.errorVariable = this.gpuCompute.addVariable("textureMotion1", calc_pose_error, errorTexture)
+        this.gpuCompute.setVariableDependencies(this.errorVariable, [this.errorVariable])
 
-        errorVariable.material.uniforms.motionTexture1 = motionTexture1
-        errorVariable.material.uniforms.motionTexture2 = motionTexture2
+        this.errorVariable.material.uniforms.vertexTexture = { value: vertexTexture }
+        this.errorVariable.material.uniforms.skinIndicesTexture = { value: skinIndicesTexture }
+        this.errorVariable.material.uniforms.skinWeightsTexture = { value: skinWeightsTexture }
+        this.errorVariable.material.uniforms.skinIndicesTextureSize = { value: skinIndicesTextureSize }
 
-        if (this.gpuCompute.init() !== null) {
-            console.error(error)
-        }
+        this.errorVariable.material.uniforms.motionTexture1 = { value: motionTexture1 }
+        this.errorVariable.material.uniforms.motionTexture2 = { value: motionTexture2 }
+        this.errorVariable.material.uniforms.boneSize = { value: 100 }
+
+        this.gpuCompute.init()
+        // if (gpuCompute.init() !== null) {
+        //     console.error(error)
+        // }
 
         this.gpuCompute.compute()
 
+        let buffer = new Float32Array(1024 * 1024 * 4);
+        renderer.readRenderTargetPixels(this.gpuCompute.getCurrentRenderTarget(this.errorVariable), 0, 0, 1024, 1024, buffer)
+        console.log(buffer)
+
+        return 1
+
     }
+
 
     generateClipFromPath(path) {
 

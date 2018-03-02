@@ -1,11 +1,13 @@
-import { Math as _Math, Vector3, Quaternion, Matrix4, DataTexture, FileLoader, RGBAFormat, FloatType } from 'three'
+import { Math as _Math, WebGLRenderer, Vector3, Quaternion, Matrix4, DataTexture, FileLoader, RGBAFormat, FloatType, BufferGeometry } from 'three'
 import { GPUComputationRenderer } from './GPUComputationRenderer'
 
+import calc_pose_error from './calc_pose_error.glsl'
 
 export default class MotionGraph {
 
-    constructor(clip) {
-        this.clip = clip
+    constructor(character) {
+        this.character = character
+        // this.clip = clip
 
         // 点群の重み
         this.weights = []
@@ -15,21 +17,39 @@ export default class MotionGraph {
 
     constructMotionGraph(animation) {
 
+        let bufferGeometry = new BufferGeometry().fromGeometry(this.character.geometry)
+        console.log(bufferGeometry)
+
+        let vertexTexture = new DataTexture(
+            bufferGeometry.attributes.position
+        )
+
+        let skinIndicesTextureSize = Math.sqrt(bufferGeometry.attributes.skinIndex.array.length)
+        skinIndicesTextureSize = _Math.ceilPowerOfTwo(skinIndicesTextureSize)
+        let skinIndicesTexture = new DataTexture(
+            this.character.geometry.skinIndices,
+            skinIndicesTextureSize,
+            skinIndicesTextureSize,
+            RGBAFormat,
+            FloatType
+        )
+
+        let skinWeightsTextureSize = skinIndicesTextureSize
+        let skinWeightsTexture = new DataTexture(
+            this.character.geometry.skinWeights,
+            skinWeightsTextureSize,
+            skinWeightsTextureSize,
+            RGBAFormat,
+            FloatType
+        )
 
         let hierarchyTracks = animation.hierarchy || []
-
-        console.log(hierarchyTracks)
 
         let size = Math.sqrt(hierarchyTracks.length * hierarchyTracks[0].keys.length * 4); // 4 pixels needed for 1 matrix
         size = _Math.ceilPowerOfTwo(size)
         size = Math.max(size, 4)
 
-        this.gpuCompute = new GPUComputationRenderer(size, size)
-        let motionTexture = this.gpuCompute.createTexture()
-
-        let motionMatrices = motionTexture.image.data
-
-        // let motionMatrices = new Float32Array(size * size * 4) // 4 floats per RGBA pixel
+        let motionMatrices = new Float32Array(size * size * 4) // 4 floats per RGBA pixel
 
         for (let h = 0; h < hierarchyTracks.length; h++) {
 
@@ -116,14 +136,45 @@ export default class MotionGraph {
 
             }
 
-            let error = this.gpuCompute.init()
-            if (error !== null) {
-                console.error(error)
-            }
-
-            this.gpuCompute.compute()
-
         }
+
+        let motionTexture1 = new DataTexture(
+            motionMatrices,
+            size,
+            size,
+            RGBAFormat,
+            FloatType
+        )
+
+        let motionTexture2 = new DataTexture(
+            motionMatrices,
+            size,
+            size,
+            RGBAFormat,
+            FloatType
+        )
+
+
+        let gpuComputeSize = hierarchyTracks[0].keys.length
+        this.gpuComputeSize = _Math.ceilPowerOfTwo(gpuComputeSize)
+
+        this.gpuCompute = new GPUComputationRenderer(gpuComputeSize, gpuComputeSize, new WebGLRenderer())
+        let errorTexture = this.gpuCompute.createTexture()
+        let errorVariable = this.gpuCompute.addVariable("textureMotion1", calc_pose_error, errorTexture)
+
+        errorVariable.material.uniforms.vertexTexture = vertexTexture
+        errorVariable.material.uniforms.skinIndicesTexture = skinIndicesTexture
+        errorVariable.material.uniforms.skinWeightsTexture = skinWeightsTexture
+        errorVariable.material.uniforms.skinIndicesTextureSize = skinIndicesTextureSize
+
+        errorVariable.material.uniforms.motionTexture1 = motionTexture1
+        errorVariable.material.uniforms.motionTexture2 = motionTexture2
+
+        if (this.gpuCompute.init() !== null) {
+            console.error(error)
+        }
+
+        this.gpuCompute.compute()
 
     }
 

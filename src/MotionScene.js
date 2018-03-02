@@ -1,4 +1,4 @@
-import { Scene, BufferGeometry,PlaneBufferGeometry, MeshBasicMaterial, Mesh, SkinnedMesh, AnimationClip, AnimationMixer, JSONLoader, FileLoader, Skeleton, SkeletonHelper } from 'three'
+import { Scene, BufferGeometry, PlaneBufferGeometry, MeshBasicMaterial, MeshLambertMaterial, Mesh, SkinnedMesh, AnimationClip, AnimationMixer, JSONLoader, FileLoader, Skeleton, SkeletonHelper } from 'three'
 import MotionGraph from './MotionGraph'
 
 
@@ -15,20 +15,20 @@ motionScene.add(floor)
 import skeletonUrl from 'assets/skeleton.json'
 import animationUrl from 'assets/animation.json'
 
-new JSONLoader().load(skeletonUrl, (data, mat) => {
-    let mesh = new SkinnedMesh(data, mat)
+new JSONLoader().load(skeletonUrl, (data) => {
+    let mesh = new SkinnedMesh(data, new MeshBasicMaterial({ color: 0xaaaaaa, skinning: true }))
     motionScene.add(mesh)
     mesh.scale.set(5, 5, 5)
+
+    // mesh.skeleton.bones[1].rotation.x = Math.PI / 2
 
     let helper = new SkeletonHelper(mesh)
     helper.material.linewidth = 10
     motionScene.add(helper)
 
-    console.log(mesh)
-
     new FileLoader().load(animationUrl, (data) => {
 
-        let moGraph = new MotionGraph()
+        let moGraph = new MotionGraph(mesh)
 
         let anim = JSON.parse(data)
         // anim = AnimationClip.parseAnimation(anim[0], mesh.skeleton.bones)

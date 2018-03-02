@@ -78,6 +78,14 @@ module.exports = {
                         loader: "react-svg-loader"
                     }
                 ]
+            },
+            {
+                test: /\.glsl$/,
+                use: [
+                    {
+                        loader: "raw-loader"
+                    }
+                ]
             }
         ]
     },

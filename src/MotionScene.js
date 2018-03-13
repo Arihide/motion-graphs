@@ -60,10 +60,16 @@ new JSONLoader().load(skeletonUrl, (data) => {
         // motionScene.add(sprite)
 
         let myaction = new AnimationAction(mesh)
-        myaction.clipAction(clip)
 
-        myaction.transit(clip, 406, 0.0000333, 76)
+        let graphWalk = [
+            { sourceFrame: 0, targetFrame: 76, clip: clip },
+            { sourceFrame: 406, targetFrame: 800, clip: clip },
+            { sourceFrame: 200, targetFrame: 406, clip: clip },
+            { sourceFrame: 76, targetFrame: 800, clip: clip }
+        ]
 
+        myaction.setGraphWalk(graphWalk)
+        myaction.play()
 
         motionScene.compute = function () {
 

@@ -11,29 +11,56 @@ export default class AnimationAction {
 
         this._accuIndex = 0
         this._isTransiting = false
-        this._weightInterpolantResultBuffer = new Float32Array(1)
         this._weightInterpolant = new CubicInterpolant(
             new Float32Array(2),
             new Float32Array(2),
-            1,
-            this._weightInterpolantResultBuffer
+            1
         )
 
         this.clipTime = 0
         this.nextClipTime = 0
 
-        this._rootPos = new Vector3(20, 0, 20)
-        this._rootRot = new Quaternion()
+        this._rootPos = new Vector3(0, 0, 0)
+        this._rootRotOffset = new Quaternion(0, 0, 0, 1)
 
         this._nextRootPos = new Vector3()
-        this._nextRootRot = new Quaternion()
+        this._nextRootRotOffset = new Quaternion()
+
+        this._clipPos = new Vector3(0, 0, 0)
+
+        this._nextClipPos = new Vector3()
+
+        this.clips = {}
+
+        this.graphWalk = [
+            { sourceFrame: 0, targetFrame: 0, clip: 0 },
+            { sourceFrame: 0, targetFrame: 0, clip: 0 }
+        ]
+        this.graphWalkIdx = 0
+
+        this.transitionDuration = 0.001
 
     }
 
-    clipAction(clip) {
+    setGraphWalk(graphWalk) {
+
+        this.graphWalk = graphWalk
+
+    }
+
+    play() {
+
+        let node = this.graphWalk[this.graphWalkIdx]
+        let clip = node.clip
+        let sourceFrame = node.sourceFrame
+        let targetFrame = node.targetFrame
+
+        console.log(clip)
 
         let tracks = clip.tracks
         let nTracks = tracks.length
+
+        this.clipTime = tracks[0].times[sourceFrame]
 
         for (let i = 0; i !== nTracks; i++) {
 
@@ -54,9 +81,14 @@ export default class AnimationAction {
 
         }
 
+        let nextNode = this.graphWalk[++this.graphWalkIdx]
+        if (nextNode) {
+            this.transit(targetFrame, nextNode.sourceFrame, clip, this.transitionDuration)
+        }
+
     }
 
-    transit(targetClip, targetFrame, duration, sourceFrame) {
+    transit(sourceFrame, targetFrame, targetClip, duration) {
 
         let interpolant = this._weightInterpolant
         let times = interpolant.parameterPositions
@@ -86,51 +118,62 @@ export default class AnimationAction {
 
         this._isTransiting = true
 
-        this.nextClipTime = targetClip.tracks[0].times[targetFrame]
-        this._nextRootPos.fromArray(this._interpolants[0].evaluate(times[1]))
         let target = targetClip.tracks[0].values
-        this._rootPos.fromArray(target, targetFrame * 3)
+        this._nextClipPos.fromArray(target, targetFrame * 3)
 
-        this._nextRootRot.fromArray(this._interpolants[1].evaluate(times[1]))
+        this._nextRootRotOffset.fromArray(this._interpolants[1].evaluate(times[1]))
         let targetRot = new Quaternion()
         targetRot.fromArray(targetClip.tracks[1].values, targetFrame * 4)
-        this._nextRootRot.multiply(targetRot.inverse())
+        this._nextRootRotOffset.premultiply(this._rootRotOffset)
+        this._nextRootRotOffset.multiply(targetRot.inverse())
 
         let tv = new Vector3(1, 0, 0)
-        tv.applyQuaternion(this._nextRootRot)
+        tv.applyQuaternion(this._nextRootRotOffset)
         tv.projectOnPlane(new Vector3(0, 1, 0))
-        this._nextRootRot.setFromUnitVectors(new Vector3(1, 0, 0), tv)
+        this._nextRootRotOffset.setFromUnitVectors(new Vector3(1, 0, 0), tv)
 
-        console.log('start transiting')
-        console.log(tv)
+        this.nextClipTime = targetClip.tracks[0].times[targetFrame] - duration
+        this._nextRootPos.fromArray(this._interpolants[0].evaluate(times[1]))
+        this._nextRootPos.sub(this._clipPos)
+        this._nextRootPos.applyQuaternion(this._rootRotOffset)
+        this._nextRootPos.add(this._rootPos)
 
     }
 
     update(deltaTime) {
 
+        let weight = this._updateWeight()
+
         let clipTime = this.clipTime += deltaTime
         let accuIndex = this._accuIndex ^= 1
         let bindings = this._bindings
 
-        let weight = this._updateWeight()
-
-        console.log(weight)
-
         for (let i = 0; i !== bindings.length; i++) {
 
-            this._interpolants[i].evaluate(clipTime)
+            let interpolant = this._interpolants[i]
+
+            interpolant.evaluate(clipTime)
 
             if (bindings[i].binding.path === ".bones[root].position") {
-                // this._interpolants[i].resultBuffer[0] -= this._rootPos.x
-                // this._interpolants[i].resultBuffer[1] -= this._rootPos.y
-                // this._interpolants[i].resultBuffer[2] -= this._rootPos.z
+                let pos = new Vector3()
+                pos.fromArray(interpolant.resultBuffer)
+                pos.sub(this._clipPos)
+                pos.applyQuaternion(this._rootRotOffset)
+                pos.add(this._rootPos)
+                pos.toArray(interpolant.resultBuffer)
+            } else if (bindings[i].binding.path === ".bones[root].quaternion") {
+                let rot = new Quaternion()
+                rot.fromArray(interpolant.resultBuffer)
+                rot.premultiply(this._rootRotOffset)
+                rot.toArray(interpolant.resultBuffer)
             }
 
             bindings[i].accumulate(accuIndex, weight)
 
         }
 
-        if (this._isTransiting && weight !==1) {
+
+        if (this._isTransiting && weight !== 1) {
 
             let nextClipTime = this.nextClipTime += deltaTime
 
@@ -141,14 +184,14 @@ export default class AnimationAction {
                 if (bindings[i].binding.path === ".bones[root].position") {
                     let pos = new Vector3()
                     pos.fromArray(this._interpolants[i].resultBuffer)
-                    pos.sub(this._rootPos)
-                    pos.applyQuaternion(this._nextRootRot)
+                    pos.sub(this._nextClipPos)
+                    pos.applyQuaternion(this._nextRootRotOffset)
                     pos.add(this._nextRootPos)
                     pos.toArray(this._interpolants[i].resultBuffer)
                 } else if (bindings[i].binding.path === ".bones[root].quaternion") {
                     let rot = new Quaternion()
                     rot.fromArray(this._interpolants[i].resultBuffer)
-                    rot.premultiply(this._nextRootRot)
+                    rot.premultiply(this._nextRootRotOffset)
                     rot.toArray(this._interpolants[i].resultBuffer)
                 }
 
@@ -174,13 +217,32 @@ export default class AnimationAction {
 
         let interpolant = this._weightInterpolant
 
-        let weight = interpolant.evaluate(this.clipTime)[0]
+        if (this.clipTime > interpolant.parameterPositions[1]) { //何回も呼ばれてる
 
-        if (this.time > interpolant.parameterPositions[1]) {
+            console.log('transited!')
+
+            this._interpolants = this._nextInterpolants
+            this.clipTime = this.nextClipTime
+            this._rootPos.copy(this._nextRootPos)
+            this._clipPos.copy(this._nextClipPos)
+            this._rootRotOffset.copy(this._nextRootRotOffset)
 
             this._isTransiting = false
 
+            this._nextInterpolants = []
+
+            let node = this.graphWalk[this.graphWalkIdx]
+            let nextNode = this.graphWalk[++this.graphWalkIdx]
+            if (nextNode) {
+                this.transit(node.targetFrame, nextNode.sourceFrame, nextNode.clip, this.transitionDuration)
+            }
+
+            return 1
+
         }
+
+
+        let weight = interpolant.evaluate(this.clipTime)[0]
 
         return weight
 

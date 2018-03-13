@@ -190,8 +190,15 @@ export default class MotionGraph {
                         localMinimas[pos + 2] = 0
                         localMinimas[pos + 3] = 1
                         cnt++
+
+                        let edge = {
+                            sourceFrame: i,
+                            targetFrame: j
+                        }
+
+                        edges[this.anims].push(edge)
+
                     }
-                    console.log(`i:${i} j:${j}`)
                 }
             }
         }
@@ -202,9 +209,15 @@ export default class MotionGraph {
 
     }
 
-    generateMotionFromGraphWalk(graphWalk) {
+    sampleRandomWalk() {
+
+        let graphWalkSize = 10
+        let graphWalk = []
 
 
+        for (let i = 0; i < graphWalkSize; i++) {
+            graphWalk.push()
+        }
 
     }
 

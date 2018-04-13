@@ -1,4 +1,8 @@
-import { Math as _Math, WebGLRenderer, Vector3, Quaternion, Matrix4, DataTexture, FileLoader, RGBFormat, RGBAFormat, FloatType, BufferGeometry } from 'three'
+import {
+    Math as _Math, WebGLRenderer, Vector2, Vector3, Quaternion, Matrix4,
+    DataTexture, FileLoader, RGBFormat, RGBAFormat, FloatType,
+    BufferGeometry, AnimationClip, SplineCurve
+} from 'three'
 import { GPUComputationRenderer } from './GPUComputationRenderer'
 
 import calc_pose_error from './calc_pose_error.glsl'
@@ -7,21 +11,35 @@ import MotionRenderer from './MotionRenderer'
 
 export default class MotionGraph {
 
-    constructor(character, anims) {
+    constructor(character, player) {
         this.character = character
-        this.anims = anims
+        this.player = player
 
         // 点群の重み
-        this.weights = []
+        // this.weights = []
 
-        this.transitionThreshold = 400
+        this.texture
+
+        this.edges = {}
+        this.boundary = {}
+
+        this.desirePath = new SplineCurve([
+            new Vector2(0, 0),
+            new Vector2(50, -50),
+            new Vector2(0, -100)
+        ]);
+
+        this.transitionThreshold = 300
+
+        this.errorTolerance = 1000
+
     }
 
-    constructMotionGraph(animation) {
+    constructMotionGraph(animation, bones) {
+
+        console.log("start motion graph construction")
 
         let bufferGeometry = new BufferGeometry().fromGeometry(this.character.geometry)
-
-        console.log(bufferGeometry.attributes)
 
         let vertexLength = bufferGeometry.attributes.position.count
         let vertexTextureSize = _Math.ceilPowerOfTwo(Math.sqrt(bufferGeometry.attributes.position.array.length / 3))
@@ -117,9 +135,6 @@ export default class MotionGraph {
 
         }
 
-        console.log(`motionMatrices`)
-        console.log(motionMatrices)
-
         let motionTexture1 = new DataTexture(
             motionMatrices,
             motionTexture1Size,
@@ -169,9 +184,10 @@ export default class MotionGraph {
 
         let buffer = new Float32Array(hierarchyTracks[0].keys.length * hierarchyTracks[0].keys.length * 4);
         renderer.readRenderTargetPixels(this.gpuCompute.getCurrentRenderTarget(this.errorVariable), 0, 0, hierarchyTracks[0].keys.length, hierarchyTracks[0].keys.length, buffer)
-        console.log(buffer)
 
         let errorTextureSize = hierarchyTracks[0].keys.length
+
+        let clip = this.clip = AnimationClip.parseAnimation(animation, bones)
 
         let cnt = 0
         let localMinimas = new Float32Array(errorTextureSize * errorTextureSize * 4)
@@ -189,6 +205,9 @@ export default class MotionGraph {
                         localMinimas[pos + 1] = 1
                         localMinimas[pos + 2] = 0
                         localMinimas[pos + 3] = 1
+
+                        if (i === j) continue
+
                         cnt++
 
                         let edge = {
@@ -196,32 +215,229 @@ export default class MotionGraph {
                             targetFrame: j
                         }
 
-                        edges[this.anims].push(edge)
+                        if (this.edges[clip.uuid] === undefined)
+                            this.edges[clip.uuid] = []
+
+                        this.edges[clip.uuid].push(edge)
 
                     }
                 }
             }
         }
-        console.log(localMinimas)
-        console.log(cnt)
 
-        return new DataTexture(localMinimas, hierarchyTracks[0].keys.length, hierarchyTracks[0].keys.length, RGBAFormat, FloatType)
+        this._strongConnect(clip)
+
+        console.log(this.edges)
+        console.log(`complete construction!`)
+
+        this.texture = new DataTexture(localMinimas, hierarchyTracks[0].keys.length, hierarchyTracks[0].keys.length, RGBAFormat, FloatType)
+
+    }
+
+    _strongConnect(clip) {
+
+        let stack = []
+        let lowlink = this.boundary.min = Infinity
+        let upperBoundary = this.boundary.max = this.edges[clip.uuid][this.edges[clip.uuid].length - 1].sourceFrame
+
+        for (let i = this.edges[clip.uuid].length; i--;) {
+
+            let edge = this.edges[clip.uuid][i]
+
+            if (edge.sourceFrame > edge.targetFrame) {
+
+                lowlink = Math.min(edge.targetFrame, lowlink)
+                upperBoundary = Math.max(upperBoundary, edge.sourceFrame)
+
+            }
+
+            if (edge.sourceFrame === lowlink) {
+
+                if (upperBoundary - lowlink > this.boundary.max - this.boundary.min) {
+                    this.boundary.max = upperBoundary
+                    this.boundary.min = lowlink
+                }
+
+
+                upperBoundary = 0
+
+            }
+
+        }
+
+        this.edges[clip.uuid] = this.edges[clip.uuid].filter((edge) => {
+
+            return (
+                edge.sourceFrame >= this.boundary.min && edge.sourceFrame <= this.boundary.max &&
+                edge.targetFrame >= this.boundary.min && edge.targetFrame <= this.boundary.max
+            )
+        })
+
 
     }
 
     sampleRandomWalk() {
 
-        let graphWalkSize = 10
+        let graphWalkSize = 1
         let graphWalk = []
 
-
+        graphWalk.push({ sourceFrame: this.boundary.min })
         for (let i = 0; i < graphWalkSize; i++) {
-            graphWalk.push()
+
+            let edges = this.edges[this.clip.uuid].filter((edge) => {
+                return edge.sourceFrame >= graphWalk[i].sourceFrame
+            })
+
+            let edge = edges[Math.floor(Math.random() * edges.length)]
+
+            graphWalk[i].targetFrame = edge.sourceFrame
+            graphWalk.push({ sourceFrame: edge.targetFrame })
         }
+
+        graphWalk[graphWalkSize].targetFrame = this.boundary.max
+
+
+        console.log(graphWalk)
+
+        return graphWalk
 
     }
 
-    synthesizePath(path) {
+    _search(graphWalk, clipTransform, frame, length, totalError, transited = false) {
+
+        console.log(`search called ${frame} ${length}`)
+
+        if (totalError > this.errorTolerance) {
+            return null
+        }
+
+        if (this.desirePath.getLength() <= length + 10) {
+            graphWalk.nodes[graphWalk.nodes.length - 1].targetFrame = frame
+            return graphWalk
+        }
+
+        let nextFrame = this.edges[this.clip.uuid].find((edge) => {
+            return edge.sourceFrame > frame
+        })
+
+        let points, lengths, error, nextLength, gw
+
+        if (nextFrame) {
+
+            nextFrame = nextFrame.sourceFrame
+
+            points = this.player.getTrajectory(frame, nextFrame, clipTransform)
+            lengths = [length]
+            for (let p = 1; p < points.length; p++) {
+                lengths.push(lengths[p - 1] + points[p].distanceTo(points[p - 1]))
+            }
+
+            nextLength = lengths[lengths.length - 1]
+
+            error = lengths.map((i) => {
+                return i / this.desirePath.getLength()
+            }).filter((i) => {
+                return i <= 1
+            }).reduce((prev, curr, idx) => {
+                return prev + this.desirePath.getPointAt(curr).distanceTo(points[idx])
+            }, 0)
+
+            gw = this._search(graphWalk, clipTransform, nextFrame, nextLength, totalError + error)
+
+            if (gw) {
+                return gw
+            }
+        }
+
+        if (transited) return null
+
+        graphWalk.nodes[graphWalk.nodes.length - 1].targetFrame = frame
+        let edges = this.edges[this.clip.uuid].filter((edge) => {
+            return edge.sourceFrame === frame
+        })
+        for (let edge of edges) {
+
+            nextFrame = edge.targetFrame
+
+            let nextClipTransform = this.player.getClipTransform(nextFrame, clipTransform)
+            points = this.player.getTransitingTrajectory(frame, nextFrame, clipTransform, nextClipTransform)
+            lengths = [length]
+            for (let p = 1; p < points.length; p++) {
+                lengths.push(lengths[p - 1] + points[p].distanceTo(points[p - 1]))
+            }
+            nextLength = lengths[lengths.length - 1]
+
+            console.log(lengths)
+
+            // error = lengths.map((i) => {
+            //     return i / this.desirePath.getLength()
+            // }).filter((i) => {
+            //     return i <= 1
+            // }).reduce((prev, curr, idx) => {
+            //     console.log([...points])
+            //     return prev + this.desirePath.getPointAt(curr).distanceTo(points[idx])
+            // }, 0)
+
+            let nextGraphWalk = {
+                ...graphWalk,
+                nodes: [...graphWalk.nodes, {
+                    sourceFrame: nextFrame
+                }]
+            }
+
+            gw = this._search(nextGraphWalk, nextClipTransform, nextFrame, nextLength, totalError, true)
+
+            if (gw) {
+                return gw
+            }
+
+        }
+
+        return null
+
+    }
+
+    searchPath(desirePath) {
+
+        let graphWalk
+
+        console.log(this.desirePath.getLength())
+
+        for (let edge of this.edges[this.clip.uuid]) {
+
+            let initialFrame = edge.sourceFrame
+
+            let initialClipTransform = this.player.getClipTransformFromPosDir(desirePath.getPoint(0), desirePath.getTangent(0), initialFrame)
+
+            let initialGraphWalk = {
+                initialPos: desirePath.getPoint(0),
+                initialDir: desirePath.getTangent(0),
+                nodes: [
+                    {
+                        sourceFrame: initialFrame,
+                        targetFrame: initialFrame
+                    }
+                ],
+                clipTransforms: [
+                    initialClipTransform
+                ]
+            }
+
+            graphWalk = this._search(initialGraphWalk, initialClipTransform, initialFrame, 0, 0)
+
+            if (graphWalk) break
+
+        }
+
+        if (!graphWalk) {
+            throw new Error("There is no graph walk satisfied")
+        }
+
+        console.log(graphWalk)
+
+        this.player.setGraphWalk(graphWalk)
+
+        return this.player.getGraphWalkTrajectory()
 
     }
 

@@ -5,8 +5,8 @@ import { OrbitControls } from './OrbitControls'
 import MotionScene from './MotionScene'
 import MotionRenderer from './MotionRenderer'
 
-const camera = new PerspectiveCamera(40, MotionRenderer.domElement.width / MotionRenderer.domElement.height, 1, 100000)
-camera.position.set(0, 800, 2000)
+const camera = new PerspectiveCamera(40, MotionRenderer.domElement.width / MotionRenderer.domElement.height, 1, 10000)
+camera.position.set(0, 160, 400)
 camera.lookAt(MotionScene.position)
 const controls = new OrbitControls(camera)
 

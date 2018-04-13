@@ -1,10 +1,3 @@
-// import { EventDispatcher } from '../core/EventDispatcher.js'
-// import { Vector3 } from '../math/Vector3.js'
-// import { Quaternion } from '../math/Quaternion.js'
-// import { Spherical } from '../math/Spherical.js'
-// import { Vector2 } from '../math/Vector2.js'
-// import { MOUSE } from '../constants.js'
-
 import {
     EventDispatcher,
     Vector3,

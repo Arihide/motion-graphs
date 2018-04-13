@@ -1,0 +1,1 @@
+Mocap data is CMU Graphics Lab Motion Capture Database Subject 15 Trial 1 

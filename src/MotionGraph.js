@@ -23,15 +23,9 @@ export default class MotionGraph {
         this.edges = {}
         this.boundary = {}
 
-        this.desirePath = new SplineCurve([
-            new Vector2(0, 0),
-            new Vector2(50, -50),
-            new Vector2(0, -100)
-        ]);
+        this.transitionThreshold = 400
 
-        this.transitionThreshold = 300
-
-        this.errorTolerance = 1000
+        this.errorTolerance = 5
 
     }
 
@@ -265,6 +259,8 @@ export default class MotionGraph {
 
         }
 
+        this.boundary.min = Math.max(Math.ceil(this.player.transitionDuration * 120), this.boundary.min)
+
         this.edges[clip.uuid] = this.edges[clip.uuid].filter((edge) => {
 
             return (
@@ -279,41 +275,36 @@ export default class MotionGraph {
     sampleRandomWalk() {
 
         let graphWalkSize = 1
-        let graphWalk = []
+        let nodes = []
 
-        graphWalk.push({ sourceFrame: this.boundary.min })
+        nodes.push({ sourceFrame: this.boundary.min })
         for (let i = 0; i < graphWalkSize; i++) {
 
             let edges = this.edges[this.clip.uuid].filter((edge) => {
-                return edge.sourceFrame >= graphWalk[i].sourceFrame
+                return edge.sourceFrame >= nodes[i].sourceFrame
             })
 
             let edge = edges[Math.floor(Math.random() * edges.length)]
 
-            graphWalk[i].targetFrame = edge.sourceFrame
-            graphWalk.push({ sourceFrame: edge.targetFrame })
+            nodes[i].targetFrame = edge.sourceFrame
+            nodes.push({ sourceFrame: edge.targetFrame })
         }
 
-        graphWalk[graphWalkSize].targetFrame = this.boundary.max
+        nodes[graphWalkSize].targetFrame = this.boundary.max
 
+        console.log(nodes)
 
-        console.log(graphWalk)
-
-        return graphWalk
+        return nodes
 
     }
 
-    _search(graphWalk, clipTransform, frame, length, totalError, transited = false) {
+    _search(nodes, clipTransform, frame, length, totalError, transited = false) {
 
-        console.log(`search called ${frame} ${length}`)
+        // console.log(`search called ${frame} ${length}`)
 
-        if (totalError > this.errorTolerance) {
-            return null
-        }
-
-        if (this.desirePath.getLength() <= length + 10) {
-            graphWalk.nodes[graphWalk.nodes.length - 1].targetFrame = frame
-            return graphWalk
+        if (this.desirePath.getLength() <= length + 2) {
+            nodes[nodes.length - 1].targetFrame = frame
+            return nodes
         }
 
         let nextFrame = this.edges[this.clip.uuid].find((edge) => {
@@ -338,28 +329,36 @@ export default class MotionGraph {
                 return i / this.desirePath.getLength()
             }).filter((i) => {
                 return i <= 1
-            }).reduce((prev, curr, idx) => {
-                return prev + this.desirePath.getPointAt(curr).distanceTo(points[idx])
+            }).map((curr, idx) => {
+                return this.desirePath.getPointAt(curr).distanceTo(points[idx])
             }, 0)
 
-            gw = this._search(graphWalk, clipTransform, nextFrame, nextLength, totalError + error)
+            if (Math.max.apply(this, error) < this.errorTolerance) {
+                gw = this._search(nodes, clipTransform, nextFrame, nextLength, totalError + error)
 
-            if (gw) {
-                return gw
+                if (gw) {
+                    return gw
+                }
             }
+
         }
 
         if (transited) return null
 
-        graphWalk.nodes[graphWalk.nodes.length - 1].targetFrame = frame
+        nodes[nodes.length - 1].targetFrame = frame
         let edges = this.edges[this.clip.uuid].filter((edge) => {
             return edge.sourceFrame === frame
         })
+
+        let errors = []
+        let nextClipTransforms = []
+        let nextLengths = []
+
         for (let edge of edges) {
 
             nextFrame = edge.targetFrame
 
-            let nextClipTransform = this.player.getClipTransform(nextFrame, clipTransform)
+            let nextClipTransform = this.player.getClipTransform(frame, nextFrame, clipTransform)
             points = this.player.getTransitingTrajectory(frame, nextFrame, clipTransform, nextClipTransform)
             lengths = [length]
             for (let p = 1; p < points.length; p++) {
@@ -367,28 +366,39 @@ export default class MotionGraph {
             }
             nextLength = lengths[lengths.length - 1]
 
-            console.log(lengths)
+            error = lengths.map((i) => {
+                return i / this.desirePath.getLength()
+            }).filter((i) => {
+                return i <= 1
+            }).map((curr, idx) => {
+                return this.desirePath.getPointAt(curr).distanceTo(points[idx])
+            }, 0)
 
-            // error = lengths.map((i) => {
-            //     return i / this.desirePath.getLength()
-            // }).filter((i) => {
-            //     return i <= 1
-            // }).reduce((prev, curr, idx) => {
-            //     console.log([...points])
-            //     return prev + this.desirePath.getPointAt(curr).distanceTo(points[idx])
-            // }, 0)
+            nextClipTransforms[edge] = nextClipTransform
+            nextLengths[edge] = nextLength
+            errors[edge] = Math.max.apply(this, error)
 
-            let nextGraphWalk = {
-                ...graphWalk,
-                nodes: [...graphWalk.nodes, {
-                    sourceFrame: nextFrame
-                }]
-            }
+        }
 
-            gw = this._search(nextGraphWalk, nextClipTransform, nextFrame, nextLength, totalError, true)
+        edges.sort((a, b) => {
 
-            if (gw) {
-                return gw
+            return errors[a] - errors[b]
+
+        })
+
+        for (let edge of edges) {
+
+            let nextNodes = [...nodes, {
+                sourceFrame: nextFrame
+            }]
+
+            if (errors[edge] < this.errorTolerance) {
+
+                gw = this._search(nextNodes, nextClipTransforms[edge], edge.targetFrame, nextLengths[edge], totalError + errors[edge], true)
+
+                if (gw) {
+                    return gw
+                }
             }
 
         }
@@ -399,7 +409,10 @@ export default class MotionGraph {
 
     searchPath(desirePath) {
 
-        let graphWalk
+        this.desirePath = desirePath
+
+        let nodes
+        let initialClipTransform
 
         console.log(this.desirePath.getLength())
 
@@ -407,30 +420,22 @@ export default class MotionGraph {
 
             let initialFrame = edge.sourceFrame
 
-            let initialClipTransform = this.player.getClipTransformFromPosDir(desirePath.getPoint(0), desirePath.getTangent(0), initialFrame)
+            initialClipTransform = this.player.getClipTransformFromPosDir(desirePath.getPoint(0), desirePath.getTangent(0), initialFrame)
 
-            let initialGraphWalk = {
-                initialPos: desirePath.getPoint(0),
-                initialDir: desirePath.getTangent(0),
-                nodes: [
-                    {
-                        sourceFrame: initialFrame,
-                        targetFrame: initialFrame
-                    }
-                ],
-                clipTransforms: [
-                    initialClipTransform
-                ]
-            }
+            nodes = this._search([{ sourceFrame: initialFrame }], initialClipTransform, initialFrame, 0, 0)
 
-            graphWalk = this._search(initialGraphWalk, initialClipTransform, initialFrame, 0, 0)
-
-            if (graphWalk) break
+            if (nodes) break
 
         }
 
-        if (!graphWalk) {
+        if (!nodes) {
             throw new Error("There is no graph walk satisfied")
+        }
+
+        let graphWalk = {
+            initialPos: desirePath.getPoint(0),
+            initialDir: desirePath.getTangent(0),
+            nodes: nodes
         }
 
         console.log(graphWalk)

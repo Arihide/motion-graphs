@@ -54,7 +54,7 @@ export default class AnimationAction {
         ]
         this.graphWalkIdx = 0
 
-        this.transitionDuration = 0.001
+        this.transitionDuration = 0.5
 
     }
 
@@ -71,21 +71,24 @@ export default class AnimationAction {
         let prevNode = this.graphWalk.nodes[0]
         let node
 
-        let clipTransform = this.graphWalk.clipTransforms[0]
+        let prevClipTransform = this.getClipTransformFromPosDir(this.graphWalk.initialPos, this.graphWalk.initialDir, prevNode.sourceFrame)
+        let clipTransform
 
-        this.getTrajectory(prevNode.sourceFrame, prevNode.targetFrame, clipTransform, rootTrajectory)
+        this.getTrajectory(prevNode.sourceFrame, prevNode.targetFrame, prevClipTransform, rootTrajectory)
+
+        console.log([...rootTrajectory])
 
         for (let i = 1, l = this.graphWalk.nodes.length; i < l; i++) {
 
             node = this.graphWalk.nodes[i]
+            clipTransform = this.getClipTransform(prevNode.targetFrame, node.sourceFrame, prevClipTransform)
 
-            this.getTransitingTrajectory(prevNode.targetFrame, node.sourceFrame, this.transitionDuration, rootTrajectory)
-
-            clipTransform = this.getClipTransform(node.sourceFrame, clipTransform)
-
+            this.getTransitingTrajectory(prevNode.targetFrame, node.sourceFrame, prevClipTransform, clipTransform, rootTrajectory)
+            
             this.getTrajectory(node.sourceFrame, node.targetFrame, clipTransform, rootTrajectory)
 
             prevNode = node
+            prevClipTransform = clipTransform
 
         }
 
@@ -130,11 +133,13 @@ export default class AnimationAction {
 
     }
 
-    getTransitingTrajectory(sourceFrame, targetFrame, sourceClipTransform, targetClipTransform, duration = 0, targetArray = []) {
+    getTransitingTrajectory(sourceFrame, targetFrame, sourceClipTransform, targetClipTransform, targetArray = []) {
 
         let rootBinding = this._bindings[0]
         let interpolant = this._interpolants[0]
         let rotInterpolant = this._interpolants[1]
+
+        let frameLength = Math.floor(120 * this.transitionDuration)
 
         let weightInterpolant = this._weightInterpolant
         {
@@ -143,25 +148,22 @@ export default class AnimationAction {
 
             let startTime = interpolant.parameterPositions[sourceFrame]
 
-            times[0] = startTime
-            times[1] = startTime + duration
+            times[0] = 0
+            times[1] = frameLength
             values[0] = 1
             values[1] = 0
         }
 
         let times = interpolant.parameterPositions
 
-        let frameLength = Math.floor(120 * duration)
 
         let accuIndex = 0
 
-        targetFrame -= frameLength
-
         for (let frame = 0; frame < frameLength; frame++) {
             let sourceFrameTime = times[sourceFrame + frame]
-            let targetFrameTime = times[targetFrame + frame]
+            let targetFrameTime = times[targetFrame - (frameLength - frame)]
 
-            let weight = weightInterpolant.evaluate(times[sourceFrameTime])[0]
+            let weight = weightInterpolant.evaluate(frame)[0]
 
             interpolant.evaluate(sourceFrameTime)
 
@@ -225,41 +227,6 @@ export default class AnimationAction {
         }
 
     }
-
-    getClipTransform(targetFrame, prevTransform) {
-
-        let interpolant = this._interpolants[0]
-        let rotInterpolant = this._interpolants[1]
-
-        let clipPos = new Vector3()
-        let rootPos = new Vector3()
-        let rootRotOffset = new Quaternion()
-
-        let target = interpolant.sampleValues
-        clipPos.fromArray(target, targetFrame * 3)
-
-        rootRotOffset.fromArray(rotInterpolant.sampleValues, targetFrame * 4)
-        rootRotOffset.premultiply(prevTransform.rootRotOffset)
-        rootRotOffset.multiply(prevTransform.rootRotOffset.clone().inverse())
-
-        let tv = new Vector3(1, 0, 0)
-        tv.applyQuaternion(rootRotOffset)
-        tv.projectOnPlane(new Vector3(0, 1, 0))
-        rootRotOffset.setFromUnitVectors(new Vector3(1, 0, 0), tv)
-
-        rootPos.fromArray(target, targetFrame * 3)
-        rootPos.sub(prevTransform.clipPos)
-        rootPos.applyQuaternion(prevTransform.rootRotOffset)
-        rootPos.add(prevTransform.rootPos)
-
-        return {
-            clipPos: clipPos,
-            rootPos: rootPos,
-            rootRotOffset: rootRotOffset
-        }
-
-    }
-
     getClipTransformFromPosDir(pos, dir, frame) {
 
         let interpolant = this._interpolants[0]
@@ -291,6 +258,58 @@ export default class AnimationAction {
 
     }
 
+    getClipTransform(sourceFrame, targetFrame, prevTransform) {
+
+        let interpolant = this._interpolants[0]
+        let rotInterpolant = this._interpolants[1]
+
+        let clipPos = new Vector3()
+        let rootPos = new Vector3()
+        let rootRotOffset = new Quaternion()
+
+        let target = interpolant.sampleValues
+        clipPos.fromArray(target, targetFrame * 3)
+
+        let targetRot = new Quaternion()
+        targetRot.fromArray(rotInterpolant.sampleValues, targetFrame * 4)
+        rootRotOffset.fromArray(rotInterpolant.sampleValues, sourceFrame * 4)
+        rootRotOffset.premultiply(prevTransform.rootRotOffset)
+        rootRotOffset.multiply(targetRot.inverse())
+
+        let tv = new Vector3(1, 0, 0)
+        tv.applyQuaternion(rootRotOffset)
+        tv.projectOnPlane(new Vector3(0, 1, 0))
+        rootRotOffset.setFromUnitVectors(new Vector3(1, 0, 0), tv)
+
+        rootPos.fromArray(target, sourceFrame * 3)
+
+        let targetPos = new Vector3()
+        targetPos.fromArray(target, (targetFrame - Math.floor(this.transitionDuration * 120)) * 3)
+        targetPos.subVectors(clipPos, targetPos)
+        targetPos.multiplyScalar(0.5)
+        targetPos.applyQuaternion(rootRotOffset)
+
+        let transitPos = new Vector3()
+        transitPos.fromArray(target, (sourceFrame + Math.floor(this.transitionDuration * 120)) * 3)
+        transitPos.subVectors(transitPos, rootPos)
+        transitPos.multiplyScalar(0.5)
+        transitPos.applyQuaternion(prevTransform.rootRotOffset)
+
+        rootPos.sub(prevTransform.clipPos)
+        rootPos.applyQuaternion(prevTransform.rootRotOffset)
+        rootPos.add(prevTransform.rootPos)
+        
+        rootPos.add(targetPos)
+        rootPos.add(transitPos)
+
+        return {
+            clipPos: clipPos,
+            rootPos: rootPos,
+            rootRotOffset: rootRotOffset
+        }
+
+    }
+
     reserveTransition(sourceFrame, targetFrame, targetClip, duration) {
 
         let interpolant = this._weightInterpolant
@@ -309,25 +328,19 @@ export default class AnimationAction {
 
         this._isTransiting = true
 
-        let target = targetClip.tracks[0].values
-        this._nextClipPos.fromArray(target, targetFrame * 3)
+        let clipTransform = {
+            clipPos: this._clipPos,
+            rootPos: this._rootPos,
+            rootRotOffset: this._rootRotOffset
+        }
 
-        this._nextRootRotOffset.fromArray(this._interpolants[1].evaluate(times[1]))
-        let targetRot = new Quaternion()
-        targetRot.fromArray(targetClip.tracks[1].values, targetFrame * 4)
-        this._nextRootRotOffset.premultiply(this._rootRotOffset)
-        this._nextRootRotOffset.multiply(targetRot.inverse())
+        let nextClipTransform = this.getClipTransform(sourceFrame, targetFrame, clipTransform)
 
-        let tv = new Vector3(1, 0, 0)
-        tv.applyQuaternion(this._nextRootRotOffset)
-        tv.projectOnPlane(new Vector3(0, 1, 0))
-        this._nextRootRotOffset.setFromUnitVectors(new Vector3(1, 0, 0), tv)
+        this._nextClipPos.copy(nextClipTransform.clipPos)
+        this._nextRootPos.copy(nextClipTransform.rootPos)
+        this._nextRootRotOffset.copy(nextClipTransform.rootRotOffset)
 
         this.nextClipTime = targetClip.tracks[0].times[targetFrame] - duration
-        this._nextRootPos.fromArray(this._interpolants[0].evaluate(times[1]))
-        this._nextRootPos.sub(this._clipPos)
-        this._nextRootPos.applyQuaternion(this._rootRotOffset)
-        this._nextRootPos.add(this._rootPos)
 
     }
 

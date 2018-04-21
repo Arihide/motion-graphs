@@ -10,7 +10,6 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "bezier-js": "^2.2.5",
     "dat.gui": "^0.7.1",
     "npm": "^5.8.0",
     "three": "^0.89.0"

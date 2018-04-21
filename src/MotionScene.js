@@ -21,7 +21,6 @@ import dat from 'dat.gui'
 
 const motionScene = new Scene()
 
-
 const floorGeo = new PlaneBufferGeometry(1000, 1000)
 const floorTex = new TextureLoader().load(FloorTextureUrl)
 floorTex.wrapS = floorTex.wrapT = RepeatWrapping
@@ -42,8 +41,6 @@ light2.position.set(50, 100, 50)
 light2.lookAt(0, 0, 0)
 motionScene.add(light2)
 
-
-
 new JSONLoader().load(skeletonUrl, (data) => {
     let mesh = new SkinnedMesh(data, new MeshLambertMaterial({ color: 0xaaaaff, skinning: true }))
     motionScene.add(mesh)
@@ -53,8 +50,9 @@ new JSONLoader().load(skeletonUrl, (data) => {
 
     let desirePath = new SplineCurve([
         new Vector2(0, 0),
-        new Vector2(50, -50),
-        new Vector2(0, -100)
+        new Vector2(50, 50),
+        new Vector2(0, 100),
+        new Vector2(-25, 0)
     ]);
 
     let positions = []
@@ -79,7 +77,6 @@ new JSONLoader().load(skeletonUrl, (data) => {
         let texture
 
         let myaction = new AnimationAction(mesh, clip)
-
         let moGraph = new MotionGraph(mesh, myaction)
 
         const gui = new dat.GUI()
@@ -106,10 +103,11 @@ new JSONLoader().load(skeletonUrl, (data) => {
                     initialPos: new Vector2(),
                     initialDir: desirePath.getTangent(0),
                     nodes: [
-                        { sourceFrame: 0, targetFrame: 1800 }
-                    ],
-                    clipTransforms: [
-                        myaction.getClipTransformFromPosDir(new Vector2(), desirePath.getTangent(0), 0)
+                        // { sourceFrame: 0, targetFrame: 1800 },
+                        { sourceFrame: 159, targetFrame: 176 },
+                        { sourceFrame: 1184, targetFrame: 1200 },
+                        { sourceFrame: 198, targetFrame: 209 },
+                        { sourceFrame: 200, targetFrame: 200 }
                     ]
                 }
 
@@ -118,21 +116,9 @@ new JSONLoader().load(skeletonUrl, (data) => {
                 let trajectory = myaction.getGraphWalkTrajectory()
                 let curve = new SplineCurve(trajectory)
 
-                let points = []
-                for (let i = 0; i < trajectory.length; i += 3) {
-                    points.push(trajectory[i].x)
-                    points.push(1)
-                    points.push(trajectory[i].y)
-                }
-
                 myaction.play()
 
-                let pathGeo = new LineGeometry()
-                pathGeo.setPositions(points)
-                let pathMat = new LineMaterial({ color: 0x999999, linewidth: 0.005 })
-                let pathObj = new Line2(pathGeo, pathMat)
-                pathObj.computeLineDistances()
-                motionScene.add(pathObj)
+                drawMotionCurve(trajectory)
 
                 motionScene.compute = function () {
 
@@ -150,23 +136,13 @@ new JSONLoader().load(skeletonUrl, (data) => {
                 myaction.setGraphWalk(graphWalk)
 
                 let trajectory = myaction.getGraphWalkTrajectory()
+                let curve = new SplineCurve(trajectory)
 
-                let points = []
-                for (let i = 0; i < trajectory.length; i += 3) {
-                    let point = new Vector2(trajectory[i], trajectory[i + 2])
-                    points.push(point)
-                }
-
-                let curve = new SplineCurve(points)
-
-                let pathGeo = new LineGeometry()
-                pathGeo.setPositions(trajectory)
-                let pathMat = new LineMaterial({ color: 0x999999, linewidth: 0.005 })
-                let pathObj = new Line2(pathGeo, pathMat)
-                pathObj.computeLineDistances()
-                motionScene.add(pathObj)
+                console.log(trajectory)
 
                 myaction.play()
+
+                drawMotionCurve(trajectory)
 
                 motionScene.compute = function () {
 
@@ -178,29 +154,51 @@ new JSONLoader().load(skeletonUrl, (data) => {
                 let trajectory = moGraph.searchPath(desirePath)
                 let curve = new SplineCurve(trajectory)
 
-                let points = []
-                for (let i = 0; i < trajectory.length; i += 3) {
-                    points.push(trajectory[i].x)
-                    points.push(1)
-                    points.push(trajectory[i].y)
-                }
+                drawMotionCurve(trajectory)
 
-                let pathGeo = new LineGeometry()
-                pathGeo.setPositions(points)
-                let pathMat = new LineMaterial({ color: 0x999999, linewidth: 0.005 })
-                let pathObj = new Line2(pathGeo, pathMat)
-                pathObj.computeLineDistances()
-                motionScene.add(pathObj)
+                myaction.play()
+
+                motionScene.compute = function () {
+
+                    myaction.update(0.01)
+
+                }
+            },
+            replay: function(){
+                myaction.play()
             }
         }
         gui.width = 500
         gui.add(motion, 'playOriginalClip')
         gui.add(motion, 'constructMotionGraph')
-        gui.add(motion, 'showGraphTexture')
         gui.add(motion, 'playRandomWalk')
         gui.add(motion, 'playPathSynthesis')
+        gui.add(motion, 'replay')
 
     })
+
+    const drawMotionCurve = (function () {
+
+        let pathGeo = new LineGeometry()
+        let pathMat = new LineMaterial({ color: 0x999999, linewidth: 0.005 })
+        let pathObj = new Line2(pathGeo, pathMat)
+        motionScene.add(pathObj)
+
+        return function (trajectory) {
+
+            let points = []
+            for (let i = 0; i < trajectory.length; i += 3) {
+                points.push(trajectory[i].x)
+                points.push(1)
+                points.push(trajectory[i].y)
+            }
+
+            pathGeo.setPositions(points)
+            pathObj.computeLineDistances()
+
+        }
+
+    })()
 
 })
 

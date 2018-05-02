@@ -1,8 +1,8 @@
 #include <common>
 
+// #define vertexLength 100 
 uniform sampler2D vertexTexture; 
 uniform int vertexTextureSize;
-uniform int vertexLength;
 
 uniform sampler2D skinIndicesTexture;
 uniform sampler2D skinWeightsTexture;
@@ -71,10 +71,11 @@ void main(){
 
     float poseError = 0.0;
 
-    vec4 vertexPos1s[100];
-    vec4 vertexPos2s[100];
+    // Maximum array size is 512? 
+    vec4 vertexPos1s[vertexLength];
+    vec4 vertexPos2s[vertexLength];
 
-    for(int i = 0; i < 100; i++){
+    for(int i = 0; i < vertexLength; i++){
 
         float x = mod( float( i ), float( vertexTextureSize ) );
         float y = floor( float( i ) / float( vertexTextureSize ) );
@@ -125,18 +126,19 @@ void main(){
         vertexPos2s[i] = vertexPos2;
 
     }
-
-    float theta = atan( ( crossXZ - 0.01 * (sumX1 * sumZ2 - sumX2 * sumZ1) ) / ( dotXZ - 0.01 *( sumX1 * sumX2 + sumZ1 * sumZ2 ) ) );
-    float x0 = 0.01 * ( sumX1 - sumX2 * cos(theta) - sumZ2 * sin(theta) );
-    float z0 = 0.01 *( sumZ1 + sumX2 * sin(theta) - sumZ2 * cos(theta) );
+    
+    float weight = 1.0 / float( vertexLength );
+    float theta = atan( ( crossXZ - weight * (sumX1 * sumZ2 - sumX2 * sumZ1) ) / ( dotXZ - weight *( sumX1 * sumX2 + sumZ1 * sumZ2 ) ) );
+    float x0 = weight * ( sumX1 - sumX2 * cos(theta) - sumZ2 * sin(theta) );
+    float z0 = weight * ( sumZ1 + sumX2 * sin(theta) - sumZ2 * cos(theta) );
     mat4 T = mat4( cos(theta),  0.0,   -sin(theta), 0.0,
                    0.0,         1.0,    0.0,        0.0,
                    sin(theta),  0.0,    cos(theta), 0.0,
                    x0,          0.0,    z0,         1.0 );
 
-    for(int i = 0; i < 100; i++){
+    for(int i = 0; i < vertexLength; i++){
         poseError += distance(vertexPos1s[i], T * vertexPos2s[i]);
     }
 
-    gl_FragColor = vec4(poseError);
+    gl_FragColor = vec4(poseError * weight);
 }

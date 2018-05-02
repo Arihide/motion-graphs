@@ -17,20 +17,36 @@
             font-family: Monospace;
         }
 
-        canvas {
-            min-width: 100%;
-            max-width: 100%;
+        #panel {
+            position: fixed;
+            right: 0px;
+            width: 260px;
             height: 100%;
-            min-height: 0;
-            align-self: stretch;
-            flex: 1 1 80%;
+            overflow: auto;
+            background: #fafafa;
+        }
+
+        body > canvas {
+            position: absolute;
+            border: 0px;
+            right: 260px;
+            width: calc(100% - 260px);
+            height: 100%;
+            overflow: auto;
             -webkit-tap-highlight-color: transparent;
         }
     </style>
 </head>
 
 <body>
-    <canvas></canvas>
+    <div id="panel">
+        <h2>Original clips</h2>
+        <ul id="clip-list">
+        </ul>
+        <button>Construct motion graph</button>
+        <canvas id="texture" width='260' height='260'></canvas>
+    </div>
+    <canvas id="3d"></canvas>
 </body>
 
 </html>

@@ -1,7 +1,7 @@
 import {
     Math as _Math, WebGLRenderer, Vector2, Vector3, Quaternion, Matrix4,
     DataTexture, FileLoader, RGBFormat, RGBAFormat, FloatType,
-    BufferGeometry, AnimationClip, SplineCurve
+    BufferGeometry, SplineCurve
 } from 'three'
 import { GPUComputationRenderer } from './GPUComputationRenderer'
 
@@ -21,19 +21,32 @@ export default class MotionGraph {
         this.texture
 
         this.edges = {}
-        this.boundary = {}
+        this.transitionEdges = {}
+        this.originalEdges = {}
 
-        this.transitionThreshold = 400
+        this.boundaries = {}
+        this.frameLengths = {}
 
-        this.errorTolerance = 5
+        // Mean distance between vertices
+        this.transitionThreshold = 1
+
+        this.errorTolerance = 150
 
     }
 
-    constructMotionGraph(animation, bones) {
+    constructMotionGraph() {
 
         console.log("start motion graph construction")
 
-        let bufferGeometry = new BufferGeometry().fromGeometry(this.character.geometry)
+        console.log(this.player)
+
+        let clips = this.player.clips
+        let mesh = this.player._root;
+        let bufferGeometry = new BufferGeometry().fromGeometry(mesh.geometry)
+
+        let bones = mesh.skeleton.bones
+
+
 
         let vertexLength = bufferGeometry.attributes.position.count
         let vertexTextureSize = _Math.ceilPowerOfTwo(Math.sqrt(bufferGeometry.attributes.position.array.length / 3))
@@ -73,224 +86,380 @@ export default class MotionGraph {
         )
         skinWeightsTexture.needsUpdate = true
 
-        let hierarchyTracks = animation.hierarchy || []
+        let boneSize = bones.length
 
-        let motionTexture1Size = Math.sqrt(hierarchyTracks.length * hierarchyTracks[0].keys.length * 4); // 4 pixels needed for 1 matrix
-        motionTexture1Size = _Math.ceilPowerOfTwo(motionTexture1Size)
-        motionTexture1Size = Math.max(motionTexture1Size, 4)
+        let motionTextures = []
+        for (let clip of clips) { //creating motion texture
 
-        let motionMatrices = new Float32Array(motionTexture1Size * motionTexture1Size * 4) // 4 floats per RGBA pixel
+            let keySize = clip.tracks[0].times.length
 
-        for (let h = 0; h < hierarchyTracks.length; h++) {
+            let motionTextureSize = Math.sqrt(boneSize * keySize * 4); // 4 pixels needed for 1 matrix
+            motionTextureSize = _Math.ceilPowerOfTwo(motionTextureSize)
+            motionTextureSize = Math.max(motionTextureSize, 4)
 
-            let keys = hierarchyTracks[h].keys
+            let motionMatrices = new Float32Array(motionTextureSize * motionTextureSize * 4) // 4 floats per RGBA pixel
 
-            let tPos = new Vector3()
-            let tRot = new Quaternion()
-            let tScl = new Vector3(1, 1, 1)
+            let interpolants = this.player._interpolants
+            let bindings = this.player._bindings
 
-            for (let a = 0; a < keys.length; a++) {
+            this.originalEdges[clip.uuid] = []
+            this.transitionEdges[clip.uuid] = []
 
-                let parent = hierarchyTracks[h].parent
+            for (let k = 0; k < keySize; k++) {
 
-                if (parent === -1) {
-                    let offset = (h + a * hierarchyTracks.length) * 16
+                let time = clip.tracks[0].times[k]
 
-                    motionMatrices.set([
-                        1, 0, 0, 0,
-                        0, 1, 0, 0,
-                        0, 0, 1, 0,
-                        0, 0, 0, 1
-                    ], offset)
+                for (let i = 0; i < bindings.length; i++) {
 
-                } else {
-
-                    let parentKeys = hierarchyTracks[parent].keys
-
-                    tPos.fromArray(parentKeys[a].pos || [0, 0, 0])
-                    tRot.fromArray(parentKeys[a].rot || [0, 0, 0, 1])
-
-                    let tMat = new Matrix4()
-                    tMat.compose(tPos, tRot, tScl)
-
-                    let offset = (parent + a * hierarchyTracks.length) * 16
-
-                    let tpMat = new Matrix4()
-                    tpMat.fromArray(motionMatrices, offset)
-
-                    tMat.premultiply(tpMat)
-
-                    offset = (h + a * hierarchyTracks.length) * 16
-                    tMat.toArray(motionMatrices, offset)
+                    interpolants[clip.uuid][i].evaluate(time)
+                    bindings[i].accumulate(0, 1)
+                    bindings[i].apply(0)
 
                 }
 
+                for (let b = 0; b < boneSize; b++) {
+
+                    bones[b].updateMatrix()
+                    bones[b].updateMatrixWorld()
+                    motionMatrices.set(bones[b].matrixWorld.elements, (b + k * boneSize) * 16)
+
+                }
+
+                this.transitionEdges[clip.uuid][k] = []
+
             }
 
+            let motionTexture = new DataTexture(
+                motionMatrices,
+                motionTextureSize,
+                motionTextureSize,
+                RGBAFormat,
+                FloatType
+            )
+            motionTexture.needsUpdate = true
+            motionTextures.push(motionTexture)
         }
-
-        let motionTexture1 = new DataTexture(
-            motionMatrices,
-            motionTexture1Size,
-            motionTexture1Size,
-            RGBAFormat,
-            FloatType
-        )
-        motionTexture1.needsUpdate = true
-
-        let motionTexture2 = new DataTexture(
-            motionMatrices,
-            motionTexture1Size,
-            motionTexture1Size,
-            RGBAFormat,
-            FloatType
-        )
-        motionTexture2.needsUpdate = true
-
-        let gpuComputeSize = hierarchyTracks[0].keys.length
-        gpuComputeSize = _Math.ceilPowerOfTwo(gpuComputeSize)
 
         let renderer = MotionRenderer
 
-        this.gpuCompute = new GPUComputationRenderer(hierarchyTracks[0].keys.length, hierarchyTracks[0].keys.length, renderer)
-        const errorTexture = this.gpuCompute.createTexture()
-        this.errorVariable = this.gpuCompute.addVariable("textureMotion1", calc_pose_error, errorTexture)
-        this.gpuCompute.setVariableDependencies(this.errorVariable, [this.errorVariable])
+        for (let i = 0; i < clips.length; i++) { //compute pose distance and local minima
 
-        this.errorVariable.material.uniforms.vertexTexture = { value: vertexTexture }
-        this.errorVariable.material.uniforms.vertexTextureSize = { value: vertexTextureSize }
-        this.errorVariable.material.defines.VERTEX_LENGTH = vertexLength
-        this.errorVariable.material.uniforms.skinIndicesTexture = { value: skinIndicesTexture }
-        this.errorVariable.material.uniforms.skinWeightsTexture = { value: skinWeightsTexture }
-        this.errorVariable.material.uniforms.skinIndicesTextureSize = { value: skinIndicesTextureSize }
+            let clip1 = clips[i]
 
-        this.errorVariable.material.uniforms.motionTexture1 = { value: motionTexture1 }
-        this.errorVariable.material.uniforms.motionTexture2 = { value: motionTexture2 }
-        this.errorVariable.material.uniforms.motionTexture1Size = { value: motionTexture1Size }
-        this.errorVariable.material.uniforms.motionTexture2Size = { value: motionTexture1Size }
-        this.errorVariable.material.uniforms.boneSize = { value: hierarchyTracks.length }
+            for (let j = 0; j < clips.length; j++) {
 
-        if (this.gpuCompute.init() !== null) {
-            console.error(error)
-        }
+                let clip2 = clips[j]
+                let motionTexture1 = motionTextures[i]
+                let motionTexture2 = motionTextures[j]
 
-        this.gpuCompute.compute()
+                let keySize1 = clip1.tracks[0].times.length
+                let keySize2 = clip2.tracks[0].times.length
 
-        let buffer = new Float32Array(hierarchyTracks[0].keys.length * hierarchyTracks[0].keys.length * 4);
-        renderer.readRenderTargetPixels(this.gpuCompute.getCurrentRenderTarget(this.errorVariable), 0, 0, hierarchyTracks[0].keys.length, hierarchyTracks[0].keys.length, buffer)
+                this.gpuCompute = new GPUComputationRenderer(keySize1, keySize2, renderer)
 
-        let errorTextureSize = hierarchyTracks[0].keys.length
+                this.errorVariable = this.gpuCompute.addVariable("textureMotion1", calc_pose_error)
+                this.gpuCompute.setVariableDependencies(this.errorVariable, [this.errorVariable])
 
-        let clip = this.clip = AnimationClip.parseAnimation(animation, bones)
+                this.errorVariable.material.uniforms.vertexTexture = { value: vertexTexture }
+                this.errorVariable.material.uniforms.vertexTextureSize = { value: vertexTextureSize }
+                this.errorVariable.material.defines.vertexLength = 512
+                this.errorVariable.material.uniforms.skinIndicesTexture = { value: skinIndicesTexture }
+                this.errorVariable.material.uniforms.skinWeightsTexture = { value: skinWeightsTexture }
+                this.errorVariable.material.uniforms.skinIndicesTextureSize = { value: skinIndicesTextureSize }
 
-        let cnt = 0
-        let localMinimas = new Float32Array(errorTextureSize * errorTextureSize * 4)
-        for (let i = 1; i < errorTextureSize - 1; i++) {
-            for (let j = 1; j < errorTextureSize - 1; j++) {
-                let pos = (i + errorTextureSize * j) * 4
-                if (
-                    buffer[pos] < buffer[pos - 4] &&
-                    buffer[pos] < buffer[pos + 4] &&
-                    buffer[pos] < buffer[pos - errorTextureSize * 4] &&
-                    buffer[pos] < buffer[pos + errorTextureSize * 4]
-                ) {
-                    if (buffer[pos] <= this.transitionThreshold) {
-                        localMinimas[pos] = 1
-                        localMinimas[pos + 1] = 1
-                        localMinimas[pos + 2] = 0
-                        localMinimas[pos + 3] = 1
+                this.errorVariable.material.uniforms.motionTexture1 = { value: motionTexture1 }
+                this.errorVariable.material.uniforms.motionTexture2 = { value: motionTexture2 }
+                this.errorVariable.material.uniforms.motionTexture1Size = { value: motionTexture1.image.width }
+                this.errorVariable.material.uniforms.motionTexture2Size = { value: motionTexture2.image.width }
+                this.errorVariable.material.uniforms.boneSize = { value: boneSize }
 
-                        if (i === j) continue
+                if (this.gpuCompute.init() !== null) {
+                    console.error(error)
+                }
 
-                        cnt++
+                this.gpuCompute.compute()
 
-                        let edge = {
-                            sourceFrame: i,
-                            targetFrame: j
+                let buffer = new Float32Array(keySize1 * keySize2 * 4);
+                renderer.readRenderTargetPixels(this.gpuCompute.getCurrentRenderTarget(this.errorVariable), 0, 0, keySize1, keySize2, buffer)
+
+                let localMinimas = new Float32Array(keySize1 * keySize2 * 4)
+
+                if (this.edges[clip1.uuid] === undefined) {
+                    this.edges[clip1.uuid] = []
+                }
+
+                for (let k = 1; k < keySize1 - 1; k++) {
+                    for (let l = 1; l < keySize2 - 1; l++) {
+                        let pos = (k + keySize2 * l) * 4
+                        if (
+                            buffer[pos] < buffer[pos - 4] &&
+                            buffer[pos] < buffer[pos + 4] &&
+                            buffer[pos] < buffer[pos - keySize2 * 4] &&
+                            buffer[pos] < buffer[pos + keySize2 * 4]
+                        ) {
+                            if (buffer[pos] <= this.transitionThreshold) {
+                                localMinimas[pos] = 1
+                                localMinimas[pos + 1] = 1
+                                localMinimas[pos + 2] = 0
+                                localMinimas[pos + 3] = 1
+
+                                if (k === l) continue
+
+                                let edge = {
+                                    sourceFrame: k,
+                                    targetFrame: l,
+                                    targetClip: clip2
+                                }
+
+                                let node = {
+                                    frame: l,
+                                    clip: clip2
+                                }
+
+                                this.edges[clip1.uuid].push(edge)
+                                this.transitionEdges[clip1.uuid][k].push(node)
+
+                            }
                         }
-
-                        if (this.edges[clip.uuid] === undefined)
-                            this.edges[clip.uuid] = []
-
-                        this.edges[clip.uuid].push(edge)
-
                     }
                 }
+
+                this.texture = new DataTexture(localMinimas, keySize1, keySize2, RGBAFormat, FloatType)
+
             }
+
+            this.edges[clip1.uuid].sort((a, b) => {
+                return a.sourceFrame - b.sourceFrame
+            })
+
         }
 
-        this._strongConnect(clip)
+        for (let clip of clips) {
 
-        console.log(this.edges)
+            let keySize = clip.tracks[0].times.length
+
+            for (let k = 0; k < keySize; k++) {
+
+                let frame = null
+
+                for (let l = k + 1; l < keySize; l++) {
+
+                    if (this.transitionEdges[clip.uuid][l].length) {
+
+                        frame = l
+
+                        break
+
+                    }
+
+                }
+
+
+                this.originalEdges[clip.uuid][k] = frame
+
+            }
+
+            this.frameLengths[clip.uuid] = [0]
+            let values = clip.tracks[0].values
+            for (let k = 3, prev = 0; k < values.length; k += 3) {
+
+                let l = Math.pow(values[k] - values[k - 3], 2) + Math.pow(values[k + 2] - values[k - 1], 2)
+                l = Math.sqrt(l) + prev
+                this.frameLengths[clip.uuid].push(l)
+                prev = l
+            }
+
+        }
+
+        this._strongConnect(clips)
+
         console.log(`complete construction!`)
 
-        this.texture = new DataTexture(localMinimas, hierarchyTracks[0].keys.length, hierarchyTracks[0].keys.length, RGBAFormat, FloatType)
+        console.log(this.edges)
+        console.log(this.originalEdges)
+        console.log(this.transitionEdges)
+        console.log(this.frameLengths)
 
     }
 
-    _strongConnect(clip) {
+    _strongConnect(clips) {
+
+        // tarjan's strongly connected components algorithm
+        // https://gist.github.com/chadhutchins/1440602
+
+        let index = 0
+
+        let indecies = {}
+        let lowlink = {}
+        let lastFrame = {}
+        let stacked = {}
+        const edges = this.edges
+        let boundaries = this.boundaries
+
+        for (let clip of clips) {
+            indecies[clip.uuid] = []
+            lowlink[clip.uuid] = []
+            lastFrame[clip.uuid] = clip.tracks[0].times.length
+            stacked[clip.uuid] = []
+            boundaries[clip.uuid] = { min: Infinity, max: 0 }
+        }
 
         let stack = []
-        let lowlink = this.boundary.min = Infinity
-        let upperBoundary = this.boundary.max = this.edges[clip.uuid][this.edges[clip.uuid].length - 1].sourceFrame
+        let largest = []
 
-        for (let i = this.edges[clip.uuid].length; i--;) {
+        strongConnect({ clip: clips[0], frame: 0 })
 
-            let edge = this.edges[clip.uuid][i]
+        for (let node of largest) {
 
-            if (edge.sourceFrame > edge.targetFrame) {
+            boundaries[node.clip.uuid].min > node.frame && (boundaries[node.clip.uuid].min = node.frame)
+            boundaries[node.clip.uuid].max < node.frame && (boundaries[node.clip.uuid].max = node.frame)
 
-                lowlink = Math.min(edge.targetFrame, lowlink)
-                upperBoundary = Math.max(upperBoundary, edge.sourceFrame)
+        }
 
-            }
+        for (let uuid in boundaries) {
 
-            if (edge.sourceFrame === lowlink) {
+            boundaries[uuid].min = Math.max(boundaries[uuid].min, Math.ceil(120 * this.player.transitionDuration))
 
-                if (upperBoundary - lowlink > this.boundary.max - this.boundary.min) {
-                    this.boundary.max = upperBoundary
-                    this.boundary.min = lowlink
-                }
+        }
 
+        // prune edges
+        for (let clip of clips) {
 
-                upperBoundary = 0
+            let boundary = boundaries[clip.uuid]
+
+            this.edges[clip.uuid] = this.edges[clip.uuid].filter((edge) => {
+                return (
+                    edge.sourceFrame >= boundary.min && edge.sourceFrame <= boundary.max &&
+                    edge.targetFrame >= boundary.min && edge.targetFrame <= boundary.max
+                )
+            })
+
+            for (let edges of this.transitionEdges[clip.uuid]) {
+
+                edges = edges.filter((edge, frame) => {
+                    return (
+                        boundary.min <= frame && frame <= boundary.max &&
+                        boundary.min <= edge.frame && edge.frame <= boundary.max
+                    )
+                })
 
             }
 
         }
 
-        this.boundary.min = Math.max(Math.ceil(this.player.transitionDuration * 120), this.boundary.min)
+        function strongConnect(node) {
 
-        this.edges[clip.uuid] = this.edges[clip.uuid].filter((edge) => {
+            let clip = node.clip
 
-            return (
-                edge.sourceFrame >= this.boundary.min && edge.sourceFrame <= this.boundary.max &&
-                edge.targetFrame >= this.boundary.min && edge.targetFrame <= this.boundary.max
-            )
-        })
+            let last = lastFrame[clip.uuid]
 
+            lastFrame[clip.uuid] = node.frame
+
+            for (let i = node.frame; i < last; i++) {
+                indecies[clip.uuid][i] = index
+                lowlink[clip.uuid][i] = index
+                index++
+                stack.push({ clip: clip, frame: i })
+                stacked[clip.uuid][i] = true
+                // console.log(`${clip.name}:${i}`)
+            }
+
+
+            for (let i = last - 1; i >= node.frame; i--) {
+
+
+                let edge = edges[clip.uuid].find(e => { return e.sourceFrame === i })
+
+                if (edge !== undefined) {
+                    // console.log(edge)
+                    let targetClip = edge.targetClip
+                    let targetFrame = edge.targetFrame
+                    let targetLowlink = lowlink[targetClip.uuid][targetFrame]
+
+                    if (targetLowlink === undefined) {
+
+                        // console.log(targetLowlink)
+
+                        strongConnect({ clip: targetClip, frame: targetFrame })
+                        lowlink[clip.uuid][i] = Math.min(lowlink[targetClip.uuid][targetFrame], lowlink[clip.uuid][i])
+
+                    } else if (stacked[clip.uuid][i]) {
+
+                        lowlink[clip.uuid][i] = Math.min(indecies[targetClip.uuid][targetFrame], lowlink[clip.uuid][i])
+
+                    }
+                }
+
+
+                if (!Number.isInteger(lowlink[clip.uuid][i + 1]))
+                    lowlink[clip.uuid][i + 1] = Infinity
+
+                lowlink[clip.uuid][i] = Math.min(lowlink[clip.uuid][i], lowlink[clip.uuid][i + 1])
+
+
+                if (lowlink[clip.uuid][i] === indecies[clip.uuid][i]) {
+
+                    let e = stack.pop()
+                    let s = [e]
+                    while (e.frame !== i || e.clip !== clip) {
+
+                        e = stack.pop()
+                        stacked[e.clip.uuid][e.frame] = false
+                        s.push(e)
+
+                    }
+
+                    if (s.length > largest.length) {
+
+                        largest = s
+
+                    }
+
+                }
+            }
+
+        }
+
+    }
+
+    toJSON() {
+
+    }
+
+    fromJSON(json) {
 
     }
 
     sampleRandomWalk() {
 
-        let graphWalkSize = 1
+        let graphWalkSize = 5
         let nodes = []
 
-        nodes.push({ sourceFrame: this.boundary.min })
+        let clip = this.player.clips[0]
+        nodes.push({ sourceFrame: this.boundaries[clip.uuid].min, clip: clip })
         for (let i = 0; i < graphWalkSize; i++) {
 
-            let edges = this.edges[this.clip.uuid].filter((edge) => {
+            // let boundary = this.boundaries[clip.uuid]
+
+            // let nextFrame = Math.floor(Math.random() * (boundary.max - node.sourceFrame)) + node.sourceFrame
+            // nextFrame = this.originalEdges[nextFrame]
+
+            // let nextNode = this.transitionEdges[clip.uuid][nextFrame]
+
+
+            let edges = this.edges[clip.uuid].filter((edge) => {
                 return edge.sourceFrame >= nodes[i].sourceFrame
             })
 
             let edge = edges[Math.floor(Math.random() * edges.length)]
 
             nodes[i].targetFrame = edge.sourceFrame
-            nodes.push({ sourceFrame: edge.targetFrame })
+            nodes.push({ sourceFrame: edge.targetFrame, clip: edge.targetClip })
+
+            clip = edge.targetClip
         }
 
-        nodes[graphWalkSize].targetFrame = this.boundary.max
+        nodes[graphWalkSize].targetFrame = this.boundaries[clip.uuid].max
 
         console.log(nodes)
 
@@ -298,133 +467,81 @@ export default class MotionGraph {
 
     }
 
-    _search(nodes, clipTransform, frame, length, totalError, transited = false) {
 
-        // console.log(`search called ${frame} ${length}`)
-
-        if (this.desirePath.getLength() <= length + 2) {
-            nodes[nodes.length - 1].targetFrame = frame
-            return nodes
-        }
-
-        let nextFrame = this.edges[this.clip.uuid].find((edge) => {
-            return edge.sourceFrame > frame
-        })
-
-        let points, lengths, error, nextLength, gw
-
-        if (nextFrame) {
-
-            nextFrame = nextFrame.sourceFrame
-
-            points = this.player.getTrajectory(frame, nextFrame, clipTransform)
-            lengths = [length]
-            for (let p = 1; p < points.length; p++) {
-                lengths.push(lengths[p - 1] + points[p].distanceTo(points[p - 1]))
-            }
-
-            nextLength = lengths[lengths.length - 1]
-
-            error = lengths.map((i) => {
-                return i / this.desirePath.getLength()
-            }).filter((i) => {
-                return i <= 1
-            }).map((curr, idx) => {
-                return this.desirePath.getPointAt(curr).distanceTo(points[idx])
-            }, 0)
-
-            if (Math.max.apply(this, error) < this.errorTolerance) {
-                gw = this._search(nodes, clipTransform, nextFrame, nextLength, totalError + error)
-
-                if (gw) {
-                    return gw
-                }
-            }
-
-        }
-
-        if (transited) return null
-
-        nodes[nodes.length - 1].targetFrame = frame
-        let edges = this.edges[this.clip.uuid].filter((edge) => {
-            return edge.sourceFrame === frame
-        })
-
-        let errors = []
-        let nextClipTransforms = []
-        let nextLengths = []
-
-        for (let edge of edges) {
-
-            nextFrame = edge.targetFrame
-
-            let nextClipTransform = this.player.getClipTransform(frame, nextFrame, clipTransform)
-            points = this.player.getTransitingTrajectory(frame, nextFrame, clipTransform, nextClipTransform)
-            lengths = [length]
-            for (let p = 1; p < points.length; p++) {
-                lengths.push(lengths[p - 1] + points[p].distanceTo(points[p - 1]))
-            }
-            nextLength = lengths[lengths.length - 1]
-
-            error = lengths.map((i) => {
-                return i / this.desirePath.getLength()
-            }).filter((i) => {
-                return i <= 1
-            }).map((curr, idx) => {
-                return this.desirePath.getPointAt(curr).distanceTo(points[idx])
-            }, 0)
-
-            nextClipTransforms[edge] = nextClipTransform
-            nextLengths[edge] = nextLength
-            errors[edge] = Math.max.apply(this, error)
-
-        }
-
-        edges.sort((a, b) => {
-
-            return errors[a] - errors[b]
-
-        })
-
-        for (let edge of edges) {
-
-            let nextNodes = [...nodes, {
-                sourceFrame: nextFrame
-            }]
-
-            if (errors[edge] < this.errorTolerance) {
-
-                gw = this._search(nextNodes, nextClipTransforms[edge], edge.targetFrame, nextLengths[edge], totalError + errors[edge], true)
-
-                if (gw) {
-                    return gw
-                }
-            }
-
-        }
-
-        return null
-
-    }
 
     searchPath(desirePath) {
 
-        this.desirePath = desirePath
+        const player = this.player
+        const edges = this.edges
+        const originalEdges = this.originalEdges
+        const transitionEdges = this.transitionEdges
+        const errorTolerance = this.errorTolerance
 
         let nodes
-        let initialClipTransform
+        let bestGraph
+        let minError = Infinity
+        let pathLength = Math.min(40, desirePath.getLength())
 
-        console.log(this.desirePath.getLength())
+        console.log(desirePath.getLength())
 
-        for (let edge of this.edges[this.clip.uuid]) {
+        for (let clip of this.player.clips) {
 
-            let initialFrame = edge.sourceFrame
+            let boundary = this.boundaries[clip.uuid]
 
-            initialClipTransform = this.player.getClipTransformFromPosDir(desirePath.getPoint(0), desirePath.getTangent(0), initialFrame)
+            for (let frame = boundary.min; frame < boundary.max; frame += 10) {
 
-            nodes = this._search([{ sourceFrame: initialFrame }], initialClipTransform, initialFrame, 0, 0)
+                let initialClipTransform = this.player.getClipTransformFromPosDir(desirePath.getPoint(0), desirePath.getTangent(0), frame, clip)
 
-            if (nodes) break
+                nodes = _search([{ clip: clip, sourceFrame: frame }], initialClipTransform, frame, 0, 0, true)
+
+                if (nodes && minError < this.errorTolerance) break
+
+            }
+
+        }
+
+        nodes = bestGraph
+
+        if (pathLength < desirePath.getLength()) {
+            pathLength += 20
+            pathLength = Math.min(pathLength, desirePath.getLength())
+
+            let nodesLength = nodes.reduce((prev, node, idx) => {
+                return node.targetFrame - node.sourceFrame + prev
+                // and transition frame...
+            }, 0)
+            nodesLength = Math.ceil(nodesLength / 3)
+
+            let nextNodes = []
+            let clipTransform = this.player.getClipTransformFromPosDir(desirePath.getPoint(0), desirePath.getTangent(0), nodes[0].sourceFrame, nodes[0].clip)
+            let nextFrame, nextLength = 0
+            for (let node of nodes) {
+
+                nodesLength -= node.targetFrame - node.sourceFrame
+
+                if (nodesLength > 0) {
+                    if (nextNodes.length) {
+                        let prevNode = nextNodes[nextNodes.length - 1]
+                        clipTransform = this.player.getClipTransform(prevNode.targetFrame, node.sourceFrame, clipTransform, prevNode.clip, node.clip)
+                    }
+                    nextLength += this.frameLengths[node.clip.uuid][node.targetFrame] - this.frameLengths[node.clip.uuid][node.sourceFrame]
+                    nextNodes.push(node)
+                } else {
+                    node.targetFrame += nodesLength
+                    nextFrame = node.targetFrame
+                    nextNodes.push(node)
+                    nextLength += this.frameLengths[node.clip.uuid][node.targetFrame] - this.frameLengths[node.clip.uuid][node.sourceFrame]
+                    break;
+                }
+
+            }
+
+            console.log(nextNodes)
+            console.log(nextLength)
+            minError = Infinity
+            nodes = _search(nextNodes, clipTransform, nextFrame, nextLength, 0, false)
+
+            nodes = bestGraph
 
         }
 
@@ -443,6 +560,130 @@ export default class MotionGraph {
         this.player.setGraphWalk(graphWalk)
 
         return this.player.getGraphWalkTrajectory()
+
+        // exceedingly slow...
+        function _search(nodes, clipTransform, frame, length, totalError, transited = false) {
+
+            console.log(`search called ${frame} ${length} ${totalError} ${transited} ${minError}`)
+
+            let clip = nodes[nodes.length - 1].clip
+
+            if (pathLength <= length + 2) {
+                nodes[nodes.length - 1].targetFrame = frame
+                bestGraph = nodes
+                minError = totalError
+                return nodes
+            }
+
+
+            let nextFrame = originalEdges[clip.uuid][frame]
+
+            let points, lengths, error, nextLength, gw
+
+            if (nextFrame) {
+
+                points = player.getTrajectory(frame, nextFrame, clipTransform, clip)
+                lengths = [length]
+                for (let p = 1; p < points.length; p++) {
+                    lengths.push(lengths[p - 1] + points[p].distanceTo(points[p - 1]))
+                }
+
+                nextLength = lengths[lengths.length - 1]
+
+                error = lengths.map((i) => {
+                    return i / pathLength
+                }).filter((i) => {
+                    return i <= 1
+                }).reduce((prev, curr, idx) => {
+                    return prev + desirePath.getPointAt(curr).distanceTo(points[idx])
+                }, 0)
+
+                // if (error / (nextLength - length) > minError / pathLength) {
+                //     return null
+                // }
+
+                if (totalError + error < minError) {
+                    gw = _search(nodes, clipTransform, nextFrame, nextLength, totalError + error)
+
+                    if (gw) {
+                        return gw
+                    }
+                }
+
+            }
+
+            if (transited) return null
+
+            nodes[nodes.length - 1].targetFrame = frame
+
+            let _edges = transitionEdges[clip.uuid][frame]
+
+            let errors = []
+            let nextClipTransforms = []
+            let nextLengths = []
+
+            for (let node of _edges) {
+
+                nextFrame = node.frame
+
+                let nextClipTransform = player.getClipTransform(frame, nextFrame, clipTransform, clip, node.clip)
+                points = player.getTransitingTrajectory(frame, nextFrame, clipTransform, nextClipTransform, clip, node.clip)
+
+                lengths = [length]
+                for (let p = 1; p < points.length; p++) {
+                    lengths.push(lengths[p - 1] + points[p].distanceTo(points[p - 1]))
+                }
+                nextLength = lengths[lengths.length - 1]
+
+                if (points.length === 0) {
+
+                    nextClipTransforms[node] = nextClipTransform
+                    nextLengths[node] = nextLength
+                    errors[node] = 0
+                    continue
+                }
+
+                error = lengths.map((i) => {
+                    return i / pathLength
+                }).filter((i) => {
+                    return i <= 1
+                }).reduce((prev, curr, idx) => {
+                    return prev + desirePath.getPointAt(curr).distanceTo(points[idx])
+                }, 0)
+
+                nextClipTransforms[node] = nextClipTransform
+                nextLengths[node] = nextLength
+                errors[node] = error
+
+            }
+
+            // _edges.sort((a, b) => {
+
+            //     return errors[a] - errors[b]
+
+            // })
+
+            for (let node of _edges) {
+
+                let nextNodes = [...nodes, {
+                    clip: clip,
+                    sourceFrame: nextFrame
+                }]
+
+                if (errors[node] + totalError < minError) {
+
+                    gw = _search(nextNodes, nextClipTransforms[node], node.frame, nextLengths[node], totalError + errors[node], true)
+
+                    if (gw) {
+                        return gw
+                    }
+                }
+
+            }
+
+            return null
+
+        }
 
     }
 

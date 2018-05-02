@@ -17,6 +17,9 @@ import AnimationAction from './AnimationAction'
 import skeletonUrl from 'assets/skeleton.json'
 import animationUrl from 'assets/animation.json'
 
+import skeletonUrl2 from 'assets/16.json'
+import animationsUrl from 'assets/animations.json'
+
 import dat from 'dat.gui'
 
 const motionScene = new Scene()
@@ -41,7 +44,7 @@ light2.position.set(50, 100, 50)
 light2.lookAt(0, 0, 0)
 motionScene.add(light2)
 
-new JSONLoader().load(skeletonUrl, (data) => {
+new JSONLoader().load(skeletonUrl2, (data) => {
     let mesh = new SkinnedMesh(data, new MeshLambertMaterial({ color: 0xaaaaff, skinning: true }))
     motionScene.add(mesh)
 
@@ -50,9 +53,13 @@ new JSONLoader().load(skeletonUrl, (data) => {
 
     let desirePath = new SplineCurve([
         new Vector2(0, 0),
-        new Vector2(50, 50),
-        new Vector2(0, 100),
-        new Vector2(-25, 0)
+        new Vector2(20, 10),
+        new Vector2(30, 30),
+        // new Vector2(60, 0),
+        new Vector2(60, 60),
+        // new Vector2(-60, 0),
+        // new Vector2(-30, -30),
+        // new Vector2(0, 0),
     ]);
 
     let positions = []
@@ -69,45 +76,45 @@ new JSONLoader().load(skeletonUrl, (data) => {
     desirePathObj.computeLineDistances()
     motionScene.add(desirePathObj)
 
-    new FileLoader().load(animationUrl, (data) => {
+    new FileLoader().load(animationsUrl, (data) => {
 
         let anim = JSON.parse(data)
-        let clip = AnimationClip.parseAnimation(anim[1], mesh.skeleton.bones)
+
+        let clips = []
+        for (let a of anim) {
+            clips.push(AnimationClip.parseAnimation(a, mesh.skeleton.bones))
+        }
+
+        clips = clips.slice(2, 4)
+
+        console.log(clips)
+
+        for (let clip of clips) {
+
+            let ul = document.getElementById("clip-list")
+            let elem = document.createElement('li')
+            elem.innerHTML = `${clip.name}:<button>play</button>`
+            ul.appendChild(elem)
+
+        }
 
         let texture
 
-        let myaction = new AnimationAction(mesh, clip)
+        let myaction = new AnimationAction(mesh, clips)
         let moGraph = new MotionGraph(mesh, myaction)
 
         const gui = new dat.GUI()
-        const motion = {
-            transitionThreshold: 100,
-            constructMotionGraph: function () {
-                moGraph.constructMotionGraph(anim[1], mesh.skeleton.bones)
-            },
-            showGraphTexture: function () {
-                let texture = moGraph.texture
-                texture.image.data = texture.image.data.map((x, i) => {
-                    return x / 3000
-                })
-                texture.needsUpdate = true
 
-                let spriteMaterial = new SpriteMaterial({ map: texture, color: 0xffffff })
-                let sprite = new Sprite(spriteMaterial)
-                // sprite.scale.set(500, 500, 500)
-                sprite.position.set(0, 0, 100)
-                motionScene.add(sprite)
-            },
-            playOriginalClip: function () {
+        const clipFolder = gui.addFolder('Original Clips')
+        const clipPlayer = {}
+        for (let clip of clips) {
+
+            clipPlayer[`play ${clip.name}`] = function () {
                 let graphWalk = {
                     initialPos: new Vector2(),
                     initialDir: desirePath.getTangent(0),
                     nodes: [
-                        // { sourceFrame: 0, targetFrame: 1800 },
-                        { sourceFrame: 159, targetFrame: 176 },
-                        { sourceFrame: 1184, targetFrame: 1200 },
-                        { sourceFrame: 198, targetFrame: 209 },
-                        { sourceFrame: 200, targetFrame: 200 }
+                        { sourceFrame: 0, targetFrame: 1800, clip: clip }
                     ]
                 }
 
@@ -125,6 +132,39 @@ new JSONLoader().load(skeletonUrl, (data) => {
                     myaction.update(0.01)
 
                 }
+            }
+
+            clipFolder.add(clipPlayer, `play ${clip.name}`)
+
+        }
+
+        const motionGraphConstruction = gui.addFolder('Motion Graphs Construction')
+        motionGraphConstruction.add(moGraph, 'transitionThreshold')
+
+        const motion = {
+            constructMotionGraph: function () {
+                moGraph.constructMotionGraph()
+            },
+            showGraphTexture: function () {
+
+                let canvas = document.getElementById("texture")
+                let ctx = canvas.getContext('2d')
+
+                let texture = moGraph.texture
+                // texture.image.data = texture.image.data.map((x, i) => {
+                //     return x / 30000000
+                // })
+                // texture.needsUpdate = true
+
+                console.log(texture)
+
+                ctx.drawImage(texture.image, 100, 100)
+
+                // let spriteMaterial = new SpriteMaterial({ map: texture, color: 0xffffff })
+                // let sprite = new Sprite(spriteMaterial)
+                // // sprite.scale.set(500, 500, 500)
+                // sprite.position.set(0, 0, 100)
+                // motionScene.add(sprite)
             },
             playRandomWalk: function () {
                 let graphWalk = {
@@ -164,13 +204,13 @@ new JSONLoader().load(skeletonUrl, (data) => {
 
                 }
             },
-            replay: function(){
+            replay: function () {
                 myaction.play()
             }
         }
         gui.width = 500
-        gui.add(motion, 'playOriginalClip')
         gui.add(motion, 'constructMotionGraph')
+        gui.add(motion, 'showGraphTexture')
         gui.add(motion, 'playRandomWalk')
         gui.add(motion, 'playPathSynthesis')
         gui.add(motion, 'replay')
@@ -179,12 +219,16 @@ new JSONLoader().load(skeletonUrl, (data) => {
 
     const drawMotionCurve = (function () {
 
-        let pathGeo = new LineGeometry()
-        let pathMat = new LineMaterial({ color: 0x999999, linewidth: 0.005 })
-        let pathObj = new Line2(pathGeo, pathMat)
-        motionScene.add(pathObj)
-
         return function (trajectory) {
+
+            let o = motionScene.getObjectByName("path")
+            motionScene.remove(o)
+
+            let pathGeo = new LineGeometry()
+            let pathMat = new LineMaterial({ color: 0x999999, linewidth: 0.005 })
+            let pathObj = new Line2(pathGeo, pathMat)
+            pathObj.name = "path"
+            motionScene.add(pathObj)
 
             let points = []
             for (let i = 0; i < trajectory.length; i += 3) {

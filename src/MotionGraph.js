@@ -28,7 +28,7 @@ export default class MotionGraph {
         this.frameLengths = {}
 
         // Mean distance between vertices
-        this.transitionThreshold = 1
+        this.transitionThreshold = 1.2
 
         this.errorTolerance = 150
 
@@ -480,7 +480,8 @@ export default class MotionGraph {
         let nodes
         let bestGraph
         let minError = Infinity
-        let pathLength = Math.min(40, desirePath.getLength())
+        let pathLength = Math.min(30, desirePath.getLength())
+        let searchLength = pathLength
 
         console.log(desirePath.getLength())
 
@@ -488,13 +489,13 @@ export default class MotionGraph {
 
             let boundary = this.boundaries[clip.uuid]
 
-            for (let frame = boundary.min; frame < boundary.max; frame += 10) {
+            for (let frame = boundary.min; frame < boundary.max; frame += 15) {
 
                 let initialClipTransform = this.player.getClipTransformFromPosDir(desirePath.getPoint(0), desirePath.getTangent(0), frame, clip)
 
-                nodes = _search([{ clip: clip, sourceFrame: frame }], initialClipTransform, frame, 0, 0, true)
+                _search([{ clip: clip, sourceFrame: frame }], initialClipTransform, frame, 0, 0, true)
 
-                if (nodes && minError < this.errorTolerance) break
+                // if (nodes && minError < this.errorTolerance) break
 
             }
 
@@ -502,9 +503,11 @@ export default class MotionGraph {
 
         nodes = bestGraph
 
-        if (pathLength < desirePath.getLength()) {
-            pathLength += 20
+        while (pathLength < desirePath.getLength()) {
+
+            pathLength += 40
             pathLength = Math.min(pathLength, desirePath.getLength())
+            searchLength = pathLength - searchLength
 
             let nodesLength = nodes.reduce((prev, node, idx) => {
                 return node.targetFrame - node.sourceFrame + prev
@@ -516,6 +519,8 @@ export default class MotionGraph {
             let clipTransform = this.player.getClipTransformFromPosDir(desirePath.getPoint(0), desirePath.getTangent(0), nodes[0].sourceFrame, nodes[0].clip)
             let nextFrame, nextLength = 0
             for (let node of nodes) {
+
+                console.log({...node})
 
                 nodesLength -= node.targetFrame - node.sourceFrame
 
@@ -538,8 +543,9 @@ export default class MotionGraph {
 
             console.log(nextNodes)
             console.log(nextLength)
+            console.log(clipTransform)
             minError = Infinity
-            nodes = _search(nextNodes, clipTransform, nextFrame, nextLength, 0, false)
+            _search(nextNodes, clipTransform, nextFrame, nextLength, 0, false)
 
             nodes = bestGraph
 
@@ -569,16 +575,20 @@ export default class MotionGraph {
             let clip = nodes[nodes.length - 1].clip
 
             if (pathLength <= length + 2) {
-                nodes[nodes.length - 1].targetFrame = frame
-                bestGraph = nodes
+
+                bestGraph = []
+                for(let node of nodes){
+                    bestGraph.push({...node})
+                }
+                bestGraph[nodes.length - 1].targetFrame = frame
                 minError = totalError
-                return nodes
+                return true
             }
 
 
             let nextFrame = originalEdges[clip.uuid][frame]
 
-            let points, lengths, error, nextLength, gw
+            let points, lengths, error, nextLength
 
             if (nextFrame) {
 
@@ -598,21 +608,22 @@ export default class MotionGraph {
                     return prev + desirePath.getPointAt(curr).distanceTo(points[idx])
                 }, 0)
 
-                // if (error / (nextLength - length) > minError / pathLength) {
-                //     return null
+                let nextTotalError = error + totalError
+
+                // if (nextTotalError / nextLength < minError * 2 / searchLength) {
+
+                    if (totalError + error < minError) {
+
+                        _search(nodes, clipTransform, nextFrame, nextLength, nextTotalError)
+
+                    }
+
                 // }
 
-                if (totalError + error < minError) {
-                    gw = _search(nodes, clipTransform, nextFrame, nextLength, totalError + error)
-
-                    if (gw) {
-                        return gw
-                    }
-                }
 
             }
 
-            if (transited) return null
+            if (transited) return false
 
             nodes[nodes.length - 1].targetFrame = frame
 
@@ -672,16 +683,12 @@ export default class MotionGraph {
 
                 if (errors[node] + totalError < minError) {
 
-                    gw = _search(nextNodes, nextClipTransforms[node], node.frame, nextLengths[node], totalError + errors[node], true)
-
-                    if (gw) {
-                        return gw
-                    }
+                    _search(nextNodes, nextClipTransforms[node], node.frame, nextLengths[node], totalError + errors[node], true)
                 }
 
             }
 
-            return null
+            return false
 
         }
 

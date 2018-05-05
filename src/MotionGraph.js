@@ -28,7 +28,7 @@ export default class MotionGraph {
         this.frameLengths = {}
 
         // Mean distance between vertices
-        this.transitionThreshold = 1.2
+        this.transitionThreshold = 1.5
 
         this.errorTolerance = 150
 
@@ -45,8 +45,6 @@ export default class MotionGraph {
         let bufferGeometry = new BufferGeometry().fromGeometry(mesh.geometry)
 
         let bones = mesh.skeleton.bones
-
-
 
         let vertexLength = bufferGeometry.attributes.position.count
         let vertexTextureSize = _Math.ceilPowerOfTwo(Math.sqrt(bufferGeometry.attributes.position.array.length / 3))
@@ -480,7 +478,7 @@ export default class MotionGraph {
         let nodes
         let bestGraph
         let minError = Infinity
-        let pathLength = Math.min(30, desirePath.getLength())
+        let pathLength = Math.min(200, desirePath.getLength())
         let searchLength = pathLength
 
         console.log(desirePath.getLength())
@@ -493,7 +491,7 @@ export default class MotionGraph {
 
                 let initialClipTransform = this.player.getClipTransformFromPosDir(desirePath.getPoint(0), desirePath.getTangent(0), frame, clip)
 
-                _search([{ clip: clip, sourceFrame: frame }], initialClipTransform, frame, 0, 0, true)
+                _search([clip, frame], initialClipTransform, clip, frame, 0, 0, true)
 
                 // if (nodes && minError < this.errorTolerance) break
 
@@ -503,49 +501,78 @@ export default class MotionGraph {
 
         nodes = bestGraph
 
-        while (pathLength < desirePath.getLength()) {
+        console.log(nodes)
 
-            pathLength += 40
-            pathLength = Math.min(pathLength, desirePath.getLength())
-            searchLength = pathLength - searchLength
+        let prevNodeLength = 0
 
-            let nodesLength = nodes.reduce((prev, node, idx) => {
-                return node.targetFrame - node.sourceFrame + prev
-                // and transition frame...
-            }, 0)
-            nodesLength = Math.ceil(nodesLength / 3)
+        while (pathLength + 1 < desirePath.getLength()) {
+
+            let nodesLength = 0
+
+            for (let i = 0; i < nodes.length; i += 3) {
+                nodesLength += (nodes[i + 2] - nodes[i + 1])
+            }
+
+            nodesLength = Math.ceil((nodesLength - prevNodeLength) / 3) + prevNodeLength
+
+            prevNodeLength = nodesLength
 
             let nextNodes = []
-            let clipTransform = this.player.getClipTransformFromPosDir(desirePath.getPoint(0), desirePath.getTangent(0), nodes[0].sourceFrame, nodes[0].clip)
-            let nextFrame, nextLength = 0
-            for (let node of nodes) {
+            let clipTransform = this.player.getClipTransformFromPosDir(desirePath.getPoint(0), desirePath.getTangent(0), nodes[1], nodes[0])
+            let nextFrame, nextClip, nextLength = 0
+            for (let i = 0; i < nodes.length; i += 3) {
 
-                console.log({...node})
+                console.log(clipTransform)
 
-                nodesLength -= node.targetFrame - node.sourceFrame
+                nodesLength -= nodes[i + 2] - nodes[i + 1]
+
+                if (nextNodes.length) {
+                    clipTransform = this.player.getClipTransform(nodes[i - 1], nodes[i + 1], clipTransform, nodes[i - 3], nodes[i])
+                }
 
                 if (nodesLength > 0) {
-                    if (nextNodes.length) {
-                        let prevNode = nextNodes[nextNodes.length - 1]
-                        clipTransform = this.player.getClipTransform(prevNode.targetFrame, node.sourceFrame, clipTransform, prevNode.clip, node.clip)
+                    nextNodes[i] = nodes[i]
+                    nextNodes[i + 1] = nodes[i + 1]
+                    nextNodes[i + 2] = nodes[i + 2]
+                    let points = player.getTrajectory(nextNodes[i + 1], nextNodes[i + 2], clipTransform, nextNodes[i])
+                    let lengths = [nextLength]
+                    for (let p = 1; p < points.length; p++) {
+                        lengths.push(lengths[p - 1] + points[p].distanceTo(points[p - 1]))
                     }
-                    nextLength += this.frameLengths[node.clip.uuid][node.targetFrame] - this.frameLengths[node.clip.uuid][node.sourceFrame]
-                    nextNodes.push(node)
+                    nextLength = lengths[lengths.length - 1]
+                    // nextLength += this.frameLengths[nextNodes[i].uuid][nextNodes[i + 2]] - this.frameLengths[nextNodes[i].uuid][nextNodes[i + 1]]
+
                 } else {
-                    node.targetFrame += nodesLength
-                    nextFrame = node.targetFrame
-                    nextNodes.push(node)
-                    nextLength += this.frameLengths[node.clip.uuid][node.targetFrame] - this.frameLengths[node.clip.uuid][node.sourceFrame]
+                    nextFrame = nodes[i + 2]
+                    nextFrame += nodesLength
+                    nextNodes[i] = nodes[i]
+                    nextNodes[i + 1] = nodes[i + 1]
+                    nextNodes[i + 2] = nextFrame
+                    let points = player.getTrajectory(nextNodes[i + 1], nextNodes[i + 2], clipTransform, nextNodes[i])
+                    let lengths = [nextLength]
+                    for (let p = 1; p < points.length; p++) {
+                        lengths.push(lengths[p - 1] + points[p].distanceTo(points[p - 1]))
+                    }
+                    nextLength = lengths[lengths.length - 1]
+                    // nextLength += this.frameLengths[nextNodes[i].uuid][nextFrame] - this.frameLengths[nextNodes[i].uuid][nextNodes[i + 1]]
+                    nextNodes[i + 3] = nodes[i]
+                    nextNodes[i + 4] = nextFrame
+                    clipTransform = this.player.getClipTransform(nextNodes[i + 2], nextNodes[i + 4], clipTransform, nextNodes[i], nextNodes[i + 3])
+                    nextClip = nodes[i]
                     break;
                 }
 
             }
 
+            pathLength = 200 + nextLength
+            pathLength = Math.min(pathLength, desirePath.getLength())
+            searchLength = pathLength - nextLength
+
             console.log(nextNodes)
             console.log(nextLength)
             console.log(clipTransform)
             minError = Infinity
-            _search(nextNodes, clipTransform, nextFrame, nextLength, 0, false)
+            _search(nextNodes, clipTransform, nextClip, nextFrame, nextLength, 0, false)
 
             nodes = bestGraph
 
@@ -554,6 +581,17 @@ export default class MotionGraph {
         if (!nodes) {
             throw new Error("There is no graph walk satisfied")
         }
+
+        let _nodes = []
+        for (let i = 0; i < nodes.length; i += 3) {
+            _nodes.push({
+                clip: nodes[i],
+                sourceFrame: nodes[i + 1],
+                targetFrame: nodes[i + 2]
+            })
+        }
+
+        nodes = _nodes
 
         let graphWalk = {
             initialPos: desirePath.getPoint(0),
@@ -568,23 +606,16 @@ export default class MotionGraph {
         return this.player.getGraphWalkTrajectory()
 
         // exceedingly slow...
-        function _search(nodes, clipTransform, frame, length, totalError, transited = false) {
+        function _search(nodes, clipTransform, clip, frame, length, totalError, transited = false) {
 
-            console.log(`search called ${frame} ${length} ${totalError} ${transited} ${minError}`)
+            // console.log(`search called ${frame} ${length} ${totalError} ${transited} ${minError}`)
 
-            let clip = nodes[nodes.length - 1].clip
-
-            if (pathLength <= length + 2) {
-
-                bestGraph = []
-                for(let node of nodes){
-                    bestGraph.push({...node})
-                }
-                bestGraph[nodes.length - 1].targetFrame = frame
+            if (pathLength <= length + 1) {
+                bestGraph = [...nodes, frame]
                 minError = totalError
+                console.log(`minerror:${minError}, length:${length}`)
                 return true
             }
-
 
             let nextFrame = originalEdges[clip.uuid][frame]
 
@@ -601,7 +632,7 @@ export default class MotionGraph {
                 nextLength = lengths[lengths.length - 1]
 
                 error = lengths.map((i) => {
-                    return i / pathLength
+                    return i / desirePath.getLength()
                 }).filter((i) => {
                     return i <= 1
                 }).reduce((prev, curr, idx) => {
@@ -610,22 +641,19 @@ export default class MotionGraph {
 
                 let nextTotalError = error + totalError
 
-                // if (nextTotalError / nextLength < minError * 2 / searchLength) {
+                if (nextTotalError / (nextLength - pathLength + searchLength) < minError * 2 / searchLength) {
 
-                    if (totalError + error < minError) {
+                if (nextTotalError < minError) {
 
-                        _search(nodes, clipTransform, nextFrame, nextLength, nextTotalError)
+                    _search(nodes, clipTransform, clip, nextFrame, nextLength, nextTotalError)
 
-                    }
+                }
 
-                // }
-
+                }
 
             }
 
             if (transited) return false
-
-            nodes[nodes.length - 1].targetFrame = frame
 
             let _edges = transitionEdges[clip.uuid][frame]
 
@@ -655,7 +683,7 @@ export default class MotionGraph {
                 }
 
                 error = lengths.map((i) => {
-                    return i / pathLength
+                    return i / desirePath.getLength()
                 }).filter((i) => {
                     return i <= 1
                 }).reduce((prev, curr, idx) => {
@@ -676,14 +704,11 @@ export default class MotionGraph {
 
             for (let node of _edges) {
 
-                let nextNodes = [...nodes, {
-                    clip: clip,
-                    sourceFrame: nextFrame
-                }]
+                let nextNodes = [...nodes, frame, node.clip, node.frame]
 
                 if (errors[node] + totalError < minError) {
 
-                    _search(nextNodes, nextClipTransforms[node], node.frame, nextLengths[node], totalError + errors[node], true)
+                    _search(nextNodes, nextClipTransforms[node], node.clip, node.frame, nextLengths[node], totalError + errors[node], true)
                 }
 
             }

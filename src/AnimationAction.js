@@ -330,6 +330,8 @@ export default class AnimationAction {
 
         let nextClipTransform = this.getClipTransform(sourceFrame, targetFrame, clipTransform, sourceClip, targetClip)
 
+        console.log({...nextClipTransform})
+
         this.nextClipTransform = nextClipTransform
 
         this.nextClipTime = targetClip.tracks[0].times[targetFrame] - duration

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta http-equiv="Content-type" content="text/html; charset=utf-8" />
+    <meta name="viewport" content="width=device-width">
+    <title>Motion Test</title>
+    <style>
+        html {
+            height: 100%;
+        }
+
+        body {
+            margin: 0px;
+            height: 100%;
+            background-color: #000000;
+            font-family: Monospace;
+        }
+
+        #panel {
+            position: fixed;
+            right: 0px;
+            width: 260px;
+            height: 100%;
+            overflow: auto;
+            background: #fafafa;
+        }
+
+        body > canvas {
+            position: absolute;
+            border: 0px;
+            right: 260px;
+            width: calc(100% - 260px);
+            height: 100%;
+            overflow: auto;
+            -webkit-tap-highlight-color: transparent;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="panel">
+        <h2>Original clips</h2>
+        <ul id="clip-list"></ul>
+        <button id="mograph-construction">Construct motion graph</button>
+        <h2>Objective curves</h2>
+        <ul id="path-list"></ul>
+        <button id="synthesize-path">Synthesize path</button>
+        <button id="replay">Replay</button>
+    </div>
+    <canvas id="3d"></canvas>
+<script type="text/javascript" src="bundle.js"></script></body>
+
+</html>

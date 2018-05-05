@@ -1,14 +1,17 @@
 # Motion graphs implementation
 
+Motion graphs is a novel method for creating controllable motion by Lucas Kovar, 2002.
 
-Motion graphs is a novel method for creating controllable motion.
+You can try [here](https://arihide.github.io/motion-graphs/dist/)  
+Then, 
+1. click `Construct motion graph` button and wait
+2. select path from `Objective curves`
+3. click `Synthesize path` and wait
 
-## How to use
+This implementation is incomplete.
+I need to  
+- make smooth transition
+- remove foot-slide
+- get better motion graph search and construction performance
+- make nice GUI
 
-1. Clone project
-2. Move project directory
-3. type `npm install`
-4. `npm start`
-5. Access `127.0.0.1:8080` on your browser
-
-Mocap data is CMU Graphics Lab Motion Capture Database Subject 15 Trial 1 
